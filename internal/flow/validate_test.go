@@ -2,7 +2,7 @@ package flow
 
 import "testing"
 
-func valid() *Flow {
+func baseFlow() *Flow {
 	return &Flow{
 		Name: "f",
 		Steps: []*Step{
@@ -14,7 +14,7 @@ func valid() *Flow {
 }
 
 func TestValidateAcceptsGoodFlow(t *testing.T) {
-	if err := Validate(valid()); err != nil {
+	if err := Validate(baseFlow()); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -40,10 +40,15 @@ func TestValidateRejections(t *testing.T) {
 			f.Steps[0].Gate.OnFail = FailRetry
 		},
 		"negative concurrency": func(f *Flow) { f.Concurrency = -1 },
+		"bad join on_conflict": func(f *Flow) {
+			f.Steps[1].Agent = ""
+			f.Steps[1].Gate = Gate{Policy: GateManual}
+			f.Steps[1].Join = &Join{Strategy: JoinMerge, OnConflict: "bogus"}
+		},
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
-			f := valid()
+			f := baseFlow()
 			mutate(f)
 			if err := Validate(f); err == nil {
 				t.Fatalf("%s: expected error, got nil", name)

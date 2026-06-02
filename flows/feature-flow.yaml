@@ -25,5 +25,5 @@ steps:
     needs: [impl-api, impl-ui]
     join:
       strategy: merge
-      on_conflict: manual
+      on_conflict: escalate
     gate: { policy: manual }

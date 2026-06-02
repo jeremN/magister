@@ -19,6 +19,9 @@ func TestParseExampleFlow(t *testing.T) {
 	if f.Steps[3].Join == nil || f.Steps[3].Join.Strategy != JoinMerge {
 		t.Errorf("step 3 should be a merge join")
 	}
+	if err := Validate(f); err != nil {
+		t.Fatalf("example flow should validate: %v", err)
+	}
 }
 
 func TestParseBytesRejectsUnknownKey(t *testing.T) {

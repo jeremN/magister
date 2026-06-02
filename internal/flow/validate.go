@@ -5,6 +5,9 @@ import "fmt"
 // Validate enforces the invariants the engine relies on. By the time a flow
 // passes Validate, the engine can treat it as total.
 func Validate(f *Flow) error {
+	if f == nil {
+		return fmt.Errorf("flow is nil")
+	}
 	if f.Name == "" {
 		return fmt.Errorf("flow has no name")
 	}
@@ -102,6 +105,12 @@ func validateJoin(s *Step) error {
 		}
 	default:
 		return fmt.Errorf("step %q: unknown join strategy %q", s.ID, s.Join.Strategy)
+	}
+	switch s.Join.OnConflict {
+	case "", FailAbort, FailRetry, FailEscalate:
+		// ok
+	default:
+		return fmt.Errorf("step %q: unknown join on_conflict %q", s.ID, s.Join.OnConflict)
 	}
 	if len(s.Needs) == 0 {
 		return fmt.Errorf("step %q: join step must depend on at least one step", s.ID)

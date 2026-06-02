@@ -1,0 +1,23 @@
+# Binaries
+/bin/
+/magisterd
+/cm
+*.exe
+*.test
+*.out
+
+# Local run state / SQLite
+*.db
+*.db-wal
+*.db-shm
+.magister-run/
+.orch-run/
+
+# Go
+vendor/
+coverage.*
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/

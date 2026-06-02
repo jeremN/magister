@@ -1,0 +1,29 @@
+name: feature-flow
+concurrency: 4
+
+steps:
+  - id: plan
+    agent: opus
+    role: planner
+    gate: { policy: manual }
+
+  - id: impl-api
+    needs: [plan]
+    agent: sonnet
+    role: implementer
+    workspace: isolated
+    gate: { policy: auto, verifier: { command: "true" } }
+
+  - id: impl-ui
+    needs: [plan]
+    agent: gemini
+    role: implementer
+    workspace: isolated
+    gate: { policy: auto, verifier: { command: "true" } }
+
+  - id: integrate
+    needs: [impl-api, impl-ui]
+    join:
+      strategy: merge
+      on_conflict: manual
+    gate: { policy: manual }

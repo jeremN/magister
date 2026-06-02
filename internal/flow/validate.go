@@ -1,0 +1,147 @@
+package flow
+
+import "fmt"
+
+// Validate enforces the invariants the engine relies on. By the time a flow
+// passes Validate, the engine can treat it as total.
+func Validate(f *Flow) error {
+	if f.Name == "" {
+		return fmt.Errorf("flow has no name")
+	}
+	if len(f.Steps) == 0 {
+		return fmt.Errorf("flow has no steps")
+	}
+	if f.Concurrency < 0 {
+		return fmt.Errorf("flow concurrency must be >= 0, got %d", f.Concurrency)
+	}
+
+	byID := make(map[string]*Step, len(f.Steps))
+	for _, s := range f.Steps {
+		if s.ID == "" {
+			return fmt.Errorf("a step has no id")
+		}
+		if _, dup := byID[s.ID]; dup {
+			return fmt.Errorf("duplicate step id %q", s.ID)
+		}
+		byID[s.ID] = s
+	}
+
+	for _, s := range f.Steps {
+		for _, dep := range s.Needs {
+			if dep == s.ID {
+				return fmt.Errorf("step %q needs itself", s.ID)
+			}
+			if _, ok := byID[dep]; !ok {
+				return fmt.Errorf("step %q needs unknown step %q", s.ID, dep)
+			}
+		}
+		if s.Join == nil && s.Agent == "" {
+			return fmt.Errorf("step %q has neither an agent nor a join", s.ID)
+		}
+		if s.Join != nil && s.Agent != "" {
+			return fmt.Errorf("step %q has both an agent and a join (pick one)", s.ID)
+		}
+		if err := validateGate(s); err != nil {
+			return err
+		}
+		if err := validateJoin(s); err != nil {
+			return err
+		}
+		if s.Retry != nil && s.Retry.Max < 1 {
+			return fmt.Errorf("step %q: retry.max must be >= 1, got %d", s.ID, s.Retry.Max)
+		}
+		if s.Timeout < 0 {
+			return fmt.Errorf("step %q: timeout must be >= 0", s.ID)
+		}
+	}
+
+	if bad := findCycle(f, byID); bad != "" {
+		return fmt.Errorf("flow has a cycle involving step %q", bad)
+	}
+	return nil
+}
+
+func validateGate(s *Step) error {
+	switch s.Gate.Policy {
+	case "", GateManual:
+		// default is manual
+	case GateAuto:
+		if s.Gate.Verifier == nil || s.Gate.Verifier.Command == "" {
+			return fmt.Errorf("step %q: auto gate requires a verifier command", s.ID)
+		}
+	case GateConditional:
+		if s.Gate.Condition == nil || s.Gate.Condition.Expr == "" {
+			return fmt.Errorf("step %q: conditional gate requires a condition expr", s.ID)
+		}
+	default:
+		return fmt.Errorf("step %q: unknown gate policy %q", s.ID, s.Gate.Policy)
+	}
+
+	switch s.Gate.OnFail {
+	case "", FailAbort, FailRetry, FailEscalate:
+		// ok
+	default:
+		return fmt.Errorf("step %q: unknown on_fail %q", s.ID, s.Gate.OnFail)
+	}
+	if s.Gate.OnFail == FailRetry && s.Retry == nil {
+		return fmt.Errorf("step %q: on_fail=retry requires a retry policy", s.ID)
+	}
+	return nil
+}
+
+func validateJoin(s *Step) error {
+	if s.Join == nil {
+		return nil
+	}
+	switch s.Join.Strategy {
+	case JoinMerge:
+		// no arbiter needed
+	case JoinSelect, JoinSynthesize:
+		if s.Join.Agent == "" {
+			return fmt.Errorf("step %q: %q join requires an arbiter agent", s.ID, s.Join.Strategy)
+		}
+	default:
+		return fmt.Errorf("step %q: unknown join strategy %q", s.ID, s.Join.Strategy)
+	}
+	if len(s.Needs) == 0 {
+		return fmt.Errorf("step %q: join step must depend on at least one step", s.ID)
+	}
+	return nil
+}
+
+// findCycle runs a white/gray/black DFS over the needs graph and returns a step
+// that participates in a cycle, or "" if the graph is acyclic.
+func findCycle(f *Flow, byID map[string]*Step) string {
+	const (
+		white = iota
+		gray
+		black
+	)
+	color := make(map[string]int, len(f.Steps))
+	var bad string
+
+	var visit func(id string) bool
+	visit = func(id string) bool {
+		color[id] = gray
+		for _, dep := range byID[id].Needs {
+			switch color[dep] {
+			case gray:
+				bad = dep
+				return true
+			case white:
+				if visit(dep) {
+					return true
+				}
+			}
+		}
+		color[id] = black
+		return false
+	}
+
+	for _, s := range f.Steps {
+		if color[s.ID] == white && visit(s.ID) {
+			return bad
+		}
+	}
+	return ""
+}

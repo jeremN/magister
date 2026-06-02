@@ -1,0 +1,63 @@
+package flow
+
+import "testing"
+
+func valid() *Flow {
+	return &Flow{
+		Name: "f",
+		Steps: []*Step{
+			{ID: "a", Agent: "m", Gate: Gate{Policy: GateManual}},
+			{ID: "b", Needs: []string{"a"}, Agent: "m",
+				Gate: Gate{Policy: GateAuto, Verifier: &Verifier{Command: "true"}}},
+		},
+	}
+}
+
+func TestValidateAcceptsGoodFlow(t *testing.T) {
+	if err := Validate(valid()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateRejections(t *testing.T) {
+	cases := map[string]func(*Flow){
+		"no name":             func(f *Flow) { f.Name = "" },
+		"no steps":            func(f *Flow) { f.Steps = nil },
+		"dup id":              func(f *Flow) { f.Steps[1].ID = "a" },
+		"unknown dep":         func(f *Flow) { f.Steps[1].Needs = []string{"ghost"} },
+		"self dep":            func(f *Flow) { f.Steps[0].Needs = []string{"a"} },
+		"no agent or join":    func(f *Flow) { f.Steps[0].Agent = "" },
+		"agent and join":      func(f *Flow) { f.Steps[0].Join = &Join{Strategy: JoinMerge} },
+		"auto without verify": func(f *Flow) { f.Steps[1].Gate.Verifier = nil },
+		"bad gate policy":     func(f *Flow) { f.Steps[0].Gate.Policy = "weird" },
+		"cond without expr":   func(f *Flow) { f.Steps[0].Gate.Policy = GateConditional },
+		"select without agent": func(f *Flow) {
+			f.Steps[1].Agent = ""
+			f.Steps[1].Join = &Join{Strategy: JoinSelect}
+		},
+		"retry max zero": func(f *Flow) { f.Steps[0].Retry = &RetryPolicy{Max: 0} },
+		"onfail retry without policy": func(f *Flow) {
+			f.Steps[0].Gate.OnFail = FailRetry
+		},
+		"negative concurrency": func(f *Flow) { f.Concurrency = -1 },
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := valid()
+			mutate(f)
+			if err := Validate(f); err == nil {
+				t.Fatalf("%s: expected error, got nil", name)
+			}
+		})
+	}
+}
+
+func TestValidateDetectsCycle(t *testing.T) {
+	f := &Flow{Name: "f", Steps: []*Step{
+		{ID: "a", Needs: []string{"b"}, Agent: "m"},
+		{ID: "b", Needs: []string{"a"}, Agent: "m"},
+	}}
+	if err := Validate(f); err == nil {
+		t.Fatal("expected cycle error, got nil")
+	}
+}

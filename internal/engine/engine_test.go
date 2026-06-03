@@ -238,3 +238,40 @@ func (fakeClock) After(time.Duration) <-chan time.Time {
 	ch <- time.Unix(0, 0)
 	return ch
 }
+
+// failingStore wraps a store whose SaveStepTransition always errors, to assert
+// that transition() does NOT publish the original event on a store failure.
+type failingStore struct{ core.Store }
+
+func (failingStore) SaveStepTransition(context.Context, core.StepState, []event.Event) error {
+	return fmt.Errorf("disk full")
+}
+
+func TestTransitionDoesNotPublishOriginalOnStoreError(t *testing.T) {
+	bus := event.NewBus()
+	ch, unsub := bus.Subscribe(8)
+	defer unsub()
+
+	e := &Engine{Store: failingStore{store.NewMem()}, Bus: bus, Clock: core.SystemClock{}}
+	e.transition(context.Background(), "r1",
+		core.StepState{RunID: "r1", StepID: "a", Status: core.StepSucceeded},
+		event.Event{StepID: "a", Kind: event.StepDone})
+
+	// Exactly one frame: the store-error frame. The original step.done must NOT appear.
+	var got []event.Event
+	for {
+		select {
+		case ev := <-ch:
+			got = append(got, ev)
+			continue
+		case <-time.After(50 * time.Millisecond):
+		}
+		break
+	}
+	if len(got) != 1 {
+		t.Fatalf("want 1 event (store error only), got %d: %+v", len(got), got)
+	}
+	if got[0].Kind != event.StepFailed || !strings.Contains(got[0].Err, "store:") {
+		t.Errorf("expected store-error frame, got %+v", got[0])
+	}
+}

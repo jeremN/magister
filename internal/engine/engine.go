@@ -7,6 +7,8 @@ package engine
 import (
 	"context"
 	"fmt"
+	"io"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -31,6 +33,7 @@ type Engine struct {
 	Bus   core.Publisher
 	Sem   *semaphore.Weighted // global concurrency cap; nil = unbounded
 	Clock core.Clock
+	Log   *slog.Logger // non-fatal store/bus failures; nil = discard (M3 wires a real handler)
 }
 
 // Run executes one flow to completion. The first failing step cancels the run's
@@ -40,7 +43,9 @@ func (e *Engine) Run(parent context.Context, runID core.RunID, f *flow.Flow) err
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 
-	_ = e.Store.SetRunStatus(ctx, runID, core.RunRunning, "")
+	if err := e.Store.SetRunStatus(ctx, runID, core.RunRunning, ""); err != nil {
+		e.logger().Error("set run status running", "run", runID, "err", err)
+	}
 	e.Bus.Publish(event.Event{RunID: string(runID), Kind: event.RunStarted, At: e.Clock.Now()})
 
 	// per-run cap (0 = unlimited within the global semaphore)
@@ -132,15 +137,21 @@ func (e *Engine) Run(parent context.Context, runID core.RunID, f *flow.Flow) err
 	final := context.WithoutCancel(ctx)
 	switch {
 	case parent.Err() != nil: // external cancellation wins over any step error it caused
-		_ = e.Store.SetRunStatus(final, runID, core.RunCanceled, "canceled")
+		if err := e.Store.SetRunStatus(final, runID, core.RunCanceled, "canceled"); err != nil {
+			e.logger().Error("set run status canceled", "run", runID, "err", err)
+		}
 		e.Bus.Publish(event.Event{RunID: string(runID), Kind: event.RunDone, Err: "canceled", At: e.Clock.Now()})
 		return parent.Err()
 	case firstErr != nil:
-		_ = e.Store.SetRunStatus(final, runID, core.RunFailed, firstErr.Error())
+		if err := e.Store.SetRunStatus(final, runID, core.RunFailed, firstErr.Error()); err != nil {
+			e.logger().Error("set run status failed", "run", runID, "err", err)
+		}
 		e.Bus.Publish(event.Event{RunID: string(runID), Kind: event.RunDone, Err: firstErr.Error(), At: e.Clock.Now()})
 		return firstErr
 	default:
-		_ = e.Store.SetRunStatus(final, runID, core.RunSucceeded, "")
+		if err := e.Store.SetRunStatus(final, runID, core.RunSucceeded, ""); err != nil {
+			e.logger().Error("set run status succeeded", "run", runID, "err", err)
+		}
 		e.Bus.Publish(event.Event{RunID: string(runID), Kind: event.RunDone, At: e.Clock.Now()})
 		return nil
 	}
@@ -250,8 +261,11 @@ func (e *Engine) transition(ctx context.Context, runID core.RunID, st core.StepS
 	ev.RunID = string(runID)
 	ev.At = e.Clock.Now()
 	if err := e.Store.SaveStepTransition(context.WithoutCancel(ctx), st, []event.Event{ev}); err != nil {
-		// No silent failure: surface the store error on the live stream.
+		// persist-then-publish: the write did NOT happen, so do NOT publish the
+		// original event. Surface the store error on the live stream and stop.
 		e.Bus.Publish(event.Event{RunID: string(runID), StepID: st.StepID, Kind: event.StepFailed, Err: "store: " + err.Error(), At: e.Clock.Now()})
+		e.logger().Error("save step transition", "run", runID, "step", st.StepID, "err", err)
+		return
 	}
 	e.Bus.Publish(ev)
 }
@@ -277,4 +291,13 @@ func gatePolicyOf(s *flow.Step) flow.GatePolicy {
 		return flow.GateManual
 	}
 	return s.Gate.Policy
+}
+
+var discardLogger = slog.New(slog.NewTextHandler(io.Discard, nil))
+
+func (e *Engine) logger() *slog.Logger {
+	if e.Log != nil {
+		return e.Log
+	}
+	return discardLogger
 }

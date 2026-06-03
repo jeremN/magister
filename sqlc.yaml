@@ -1,0 +1,11 @@
+version: "2"
+sql:
+  - engine: "sqlite"
+    schema: "internal/store/migrations"
+    queries: "internal/store/query.sql"
+    gen:
+      go:
+        package: "sqldb"
+        out: "internal/store/sqldb"
+        emit_interface: false
+        emit_json_tags: false

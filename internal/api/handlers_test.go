@@ -21,7 +21,7 @@ import (
 	"concentus/internal/workspace"
 )
 
-func testServer(t *testing.T) (*httptest.Server, *supervisor.Supervisor, core.Store) {
+func newServerOnly(t *testing.T) (*Server, *supervisor.Supervisor, core.Store) {
 	t.Helper()
 	st := store.NewMem()
 	reg := supervisor.NewApprovalRegistry()
@@ -34,9 +34,15 @@ func testServer(t *testing.T) (*httptest.Server, *supervisor.Supervisor, core.St
 		Store: st, Bus: bus, Clock: core.SystemClock{},
 	}
 	sup := supervisor.New(eng, st, reg)
-	srv := &Server{Sup: sup, Store: st, Bus: bus, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), ShutdownTimeout: time.Second}
+	t.Cleanup(func() { sup.Shutdown(time.Second) })
+	return &Server{Sup: sup, Store: st, Bus: bus, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), ShutdownTimeout: time.Second}, sup, st
+}
+
+func testServer(t *testing.T) (*httptest.Server, *supervisor.Supervisor, core.Store) {
+	t.Helper()
+	srv, sup, st := newServerOnly(t)
 	hs := httptest.NewServer(srv.Router(""))
-	t.Cleanup(func() { hs.Close(); sup.Shutdown(time.Second) })
+	t.Cleanup(func() { hs.Close() })
 	return hs, sup, st
 }
 

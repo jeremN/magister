@@ -122,3 +122,82 @@ func TestResumeSkipsSucceededRerunsRest(t *testing.T) {
 		t.Errorf("resumed run status = %s, want succeeded", got.Status)
 	}
 }
+
+func TestKillAndResumeAcrossSQLiteReopen(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "runs.db")
+
+	f := &flow.Flow{Name: "f", Steps: []*flow.Step{
+		{ID: "a", Agent: "mock", Gate: flow.Gate{Policy: flow.GateManual}},
+		{ID: "b", Needs: []string{"a"}, Agent: "mock", Gate: flow.Gate{Policy: flow.GateManual}},
+		{ID: "c", Needs: []string{"b"}, Agent: "mock", Gate: flow.Gate{Policy: flow.GateManual}},
+	}}
+	if err := flow.Validate(f); err != nil {
+		t.Fatal(err)
+	}
+
+	// --- pre-crash: persist run running, a succeeded (+artifact), b running. ---
+	s1, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aArt := filepath.Join(dir, "a.out.md")
+	if err := os.WriteFile(aArt, []byte("a"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := s1.CreateRun(ctx, core.RunState{ID: "r1", Name: "f", FlowYAML: "name: f\n", Status: core.RunRunning}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s1.SaveStepTransition(ctx,
+		core.StepState{RunID: "r1", StepID: "a", Status: core.StepSucceeded, Attempt: 1,
+			Summary: "a ok", Artifacts: []core.Artifact{{StepID: "a", Path: aArt}}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s1.SaveStepTransition(ctx,
+		core.StepState{RunID: "r1", StepID: "b", Status: core.StepRunning, Attempt: 1}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s1.Close(); err != nil { // "crash": no graceful terminal status write
+		t.Fatal(err)
+	}
+
+	// --- post-crash: fresh process reopens the same file and resumes. ---
+	s2, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close()
+
+	inc, err := s2.LoadIncompleteRuns(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inc) != 1 || inc[0].ID != "r1" {
+		t.Fatalf("want r1 incomplete, got %+v", inc)
+	}
+
+	ex := &recordingExec{ran: map[string]int{}}
+	if err := newEngine(dir, s2, ex).Resume(ctx, inc[0], f); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+
+	if ex.ran["a"] != 0 {
+		t.Errorf("a (succeeded pre-crash) must not re-run, ran %d", ex.ran["a"])
+	}
+	if ex.ran["b"] != 1 || ex.ran["c"] != 1 {
+		t.Errorf("b and c must each run once; got b=%d c=%d", ex.ran["b"], ex.ran["c"])
+	}
+	got, err := s2.GetRun(ctx, "r1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != core.RunSucceeded {
+		t.Errorf("resumed run status = %s, want succeeded", got.Status)
+	}
+	for _, st := range got.Steps {
+		if st.Status != core.StepSucceeded {
+			t.Errorf("step %s status = %s, want succeeded", st.StepID, st.Status)
+		}
+	}
+}

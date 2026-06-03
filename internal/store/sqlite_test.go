@@ -4,6 +4,8 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+
+	"concentus/internal/core"
 )
 
 func tempDB(t *testing.T) *SQLite {
@@ -58,4 +60,52 @@ func TestOpenIsIdempotentAcrossReopen(t *testing.T) {
 		t.Fatalf("reopen: %v", err)
 	}
 	s2.Close()
+}
+
+func TestSQLiteCreateGetSetListRuns(t *testing.T) {
+	ctx := context.Background()
+	s := tempDB(t)
+
+	if err := s.CreateRun(ctx, core.RunState{
+		ID: "r1", Name: "feature", FlowYAML: "name: feature\n", Status: core.RunPending, Concurrency: 4,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.GetRun(ctx, "r1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Name != "feature" || got.FlowYAML != "name: feature\n" || got.Concurrency != 4 || got.Status != core.RunPending {
+		t.Fatalf("round-trip mismatch: %+v", got)
+	}
+	if len(got.Steps) != 0 {
+		t.Errorf("new run should have no steps, got %d", len(got.Steps))
+	}
+
+	if err := s.SetRunStatus(ctx, "r1", core.RunRunning, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateRun(ctx, core.RunState{ID: "r2", Name: "other", FlowYAML: "x", Status: core.RunSucceeded}); err != nil {
+		t.Fatal(err)
+	}
+
+	all, err := s.ListRuns(ctx, core.Filter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("want 2 runs, got %d", len(all))
+	}
+	running, err := s.ListRuns(ctx, core.Filter{Status: core.RunRunning})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(running) != 1 || running[0].ID != "r1" {
+		t.Fatalf("filter by status failed: %+v", running)
+	}
+
+	if _, err := s.GetRun(ctx, "nope"); err == nil {
+		t.Error("GetRun of unknown id should error")
+	}
 }

@@ -1,0 +1,111 @@
+package api
+
+import (
+	"encoding/json"
+	"errors"
+	"io"
+	"log/slog"
+	"net/http"
+	"time"
+
+	"concentus/internal/core"
+	"concentus/internal/event"
+	"concentus/internal/flow"
+	"concentus/internal/supervisor"
+)
+
+const maxBodyBytes = 1 << 20 // 1 MiB flow uploads
+
+// Server holds the dependencies the HTTP handlers need.
+type Server struct {
+	Sup             *supervisor.Supervisor
+	Store           core.Store
+	Bus             *event.Bus
+	Log             *slog.Logger
+	BearerToken     string
+	ShutdownTimeout time.Duration
+}
+
+func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
+	if err != nil {
+		writeError(w, http.StatusRequestEntityTooLarge, "flow too large")
+		return
+	}
+	f, err := flow.ParseBytes(body)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "parse flow: "+err.Error())
+		return
+	}
+	if err := flow.Validate(f); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid flow: "+err.Error())
+		return
+	}
+	id, err := s.Sup.Submit(r.Context(), f, string(body))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, runResponse{ID: id})
+}
+
+func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
+	f := core.Filter{Status: core.RunStatus(r.URL.Query().Get("status"))}
+	rows, err := s.Store.ListRuns(r.Context(), f)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	out := make([]runSummaryDTO, 0, len(rows))
+	for _, rw := range rows {
+		out = append(out, runSummaryDTO{ID: rw.ID, Name: rw.Name, Status: string(rw.Status)})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
+	rs, err := s.Store.GetRun(r.Context(), core.RunID(r.PathValue("id")))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "unknown run")
+		return
+	}
+	writeJSON(w, http.StatusOK, snapshotFromState(rs))
+}
+
+func (s *Server) handleCancelRun(w http.ResponseWriter, r *http.Request) {
+	if !s.Sup.Cancel(core.RunID(r.PathValue("id"))) {
+		writeError(w, http.StatusNotFound, "run not active")
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
+}
+
+func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
+	var req approveRequest
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	id := core.RunID(r.PathValue("id"))
+	step := r.PathValue("step")
+	if !s.Sup.Approve(id, step, req.Approve, req.Reason) {
+		writeError(w, http.StatusConflict, "no gate awaiting approval for this step")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "resolved"})
+}
+
+func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func decodeJSON(w http.ResponseWriter, r *http.Request, v any) error {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
+	if err != nil {
+		return errors.New("body too large")
+	}
+	if len(body) == 0 {
+		return nil
+	}
+	return json.Unmarshal(body, v)
+}

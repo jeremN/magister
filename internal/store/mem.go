@@ -89,7 +89,13 @@ func (m *Mem) GetRun(_ context.Context, id core.RunID) (core.RunState, error) {
 	if !ok {
 		return core.RunState{}, fmt.Errorf("unknown run %q", id)
 	}
-	return *r, nil
+	out := *r
+	out.Steps = make([]core.StepState, len(r.Steps))
+	for i, st := range r.Steps {
+		st.Artifacts = append([]core.Artifact(nil), st.Artifacts...)
+		out.Steps[i] = st
+	}
+	return out, nil
 }
 
 func (m *Mem) ListRuns(_ context.Context, f core.Filter) ([]core.RunSummary, error) {

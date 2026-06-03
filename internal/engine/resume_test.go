@@ -121,6 +121,13 @@ func TestResumeSkipsSucceededRerunsRest(t *testing.T) {
 	if got.Status != core.RunSucceeded {
 		t.Errorf("resumed run status = %s, want succeeded", got.Status)
 	}
+	// The engine records where each step it ran lived: b's persisted workdir
+	// must be non-empty (a was seeded, so its empty workdir is expected).
+	for _, st := range got.Steps {
+		if st.StepID == "b" && st.WorkDir == "" {
+			t.Errorf("step b's workdir should be persisted, got empty")
+		}
+	}
 }
 
 func TestKillAndResumeAcrossSQLiteReopen(t *testing.T) {

@@ -206,14 +206,14 @@ func (e *Engine) runStep(ctx context.Context, runID core.RunID, s *flow.Step, in
 	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		if attempt > 1 {
-			e.transition(ctx, runID, stepState(runID, s.ID, core.StepRetrying, attempt, core.Result{}, lastErr),
+			e.transition(ctx, runID, stepState(runID, s.ID, core.StepRetrying, attempt, workDir, core.Result{}, lastErr),
 				event.Event{StepID: s.ID, Kind: event.StepRetrying, Attempt: attempt})
 			if !e.backoff(ctx, s, attempt) {
 				return core.Result{}, ctx.Err()
 			}
 		}
 
-		e.transition(ctx, runID, stepState(runID, s.ID, core.StepRunning, attempt, core.Result{}, nil),
+		e.transition(ctx, runID, stepState(runID, s.ID, core.StepRunning, attempt, workDir, core.Result{}, nil),
 			event.Event{StepID: s.ID, Kind: event.StepStarted, Attempt: attempt})
 
 		res, execErr := e.execute(ctx, runID, s, inputs, workDir)
@@ -226,7 +226,7 @@ func (e *Engine) runStep(ctx context.Context, runID core.RunID, s *flow.Step, in
 			case !ok:
 				execErr = fmt.Errorf("gate failed (policy=%q)", gatePolicyOf(s))
 			default:
-				e.transition(ctx, runID, stepState(runID, s.ID, core.StepSucceeded, attempt, res, nil),
+				e.transition(ctx, runID, stepState(runID, s.ID, core.StepSucceeded, attempt, workDir, res, nil),
 					event.Event{StepID: s.ID, Kind: event.StepDone, Summary: res.Summary, CostUSD: res.CostUSD, Attempt: attempt})
 				return res, nil
 			}
@@ -236,7 +236,7 @@ func (e *Engine) runStep(ctx context.Context, runID core.RunID, s *flow.Step, in
 		if attempt < maxAttempts && s.Retry != nil {
 			continue // retry (covers both execution and gate failures)
 		}
-		e.transition(ctx, runID, stepState(runID, s.ID, core.StepFailed, attempt, core.Result{}, lastErr),
+		e.transition(ctx, runID, stepState(runID, s.ID, core.StepFailed, attempt, workDir, core.Result{}, lastErr),
 			event.Event{StepID: s.ID, Kind: event.StepFailed, Attempt: attempt, Err: lastErr.Error()})
 		return core.Result{}, lastErr
 	}
@@ -303,7 +303,7 @@ func (e *Engine) transition(ctx context.Context, runID core.RunID, st core.StepS
 	e.Bus.Publish(ev)
 }
 
-func stepState(runID core.RunID, stepID string, status core.StepStatus, attempt int, res core.Result, err error) core.StepState {
+func stepState(runID core.RunID, stepID string, status core.StepStatus, attempt int, workDir string, res core.Result, err error) core.StepState {
 	st := core.StepState{
 		RunID:     runID,
 		StepID:    stepID,
@@ -311,6 +311,7 @@ func stepState(runID core.RunID, stepID string, status core.StepStatus, attempt 
 		Attempt:   attempt,
 		Summary:   res.Summary,
 		CostUSD:   res.CostUSD,
+		WorkDir:   workDir,
 		Artifacts: res.Artifacts,
 	}
 	if err != nil {

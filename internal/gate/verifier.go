@@ -29,6 +29,11 @@ func (CommandVerifier) Verify(ctx context.Context, command, workDir string) (boo
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
 	cmd.Dir = workDir
 	if err := cmd.Run(); err != nil {
+		if ctx.Err() != nil {
+			// Killed by the step timeout / cancellation — an infra error, not a
+			// gate verdict. The engine treats it as a retryable failure.
+			return false, ctx.Err()
+		}
 		var exit *exec.ExitError
 		if errors.As(err, &exit) {
 			return false, nil // non-zero exit = check failed, not an infra error

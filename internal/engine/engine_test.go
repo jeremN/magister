@@ -319,6 +319,76 @@ func TestBackoffJitterAndCap(t *testing.T) {
 	}
 }
 
+// rejectApprover always rejects, to drive the escalate/reject and abort paths.
+type rejectApprover struct{}
+
+func (rejectApprover) Approve(context.Context, core.RunID, *flow.Step, core.Result) (bool, error) {
+	return false, nil
+}
+
+func TestTimeoutBoundsVerifier(t *testing.T) {
+	st := store.NewMem()
+	e := &Engine{
+		Execs: map[string]core.Executor{"mock": executor.Mock{Name: "mock"}},
+		WS:    &workspace.Manager{Root: t.TempDir()},
+		Gate:  &gate.Evaluator{Approver: gate.AutoApprover{}, Verifier: gate.CommandVerifier{}},
+		Joins: join.Default(),
+		Store: st, Bus: event.NewBus(), Clock: core.SystemClock{},
+	}
+	// Auto gate whose verifier hangs; a 100ms step timeout must kill it → the step
+	// fails (no retry policy) instead of waiting for `sleep` to finish.
+	f := &flow.Flow{Name: "to", Steps: []*flow.Step{
+		{ID: "a", Agent: "mock", Timeout: flow.Duration(100 * time.Millisecond),
+			Gate: flow.Gate{Policy: flow.GateAuto, Verifier: &flow.Verifier{Command: "sleep 2"}}},
+	}}
+	mustCreate(t, st, "r1", f)
+
+	start := time.Now()
+	if err := e.Run(context.Background(), "r1", f); err == nil {
+		t.Fatal("expected run to fail on verifier timeout")
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("run took %v — verifier was not bounded by the 100ms timeout", elapsed)
+	}
+	got, _ := st.GetRun(context.Background(), "r1")
+	if got.Steps[0].Status != core.StepFailed {
+		t.Fatalf("step status = %q, want failed", got.Steps[0].Status)
+	}
+}
+
+func TestTimeoutDoesNotBoundManualGate(t *testing.T) {
+	// Regression guard for the refactor: a manual gate must NOT be killed by the
+	// step timeout (humans take arbitrary time). Approve well after the timeout
+	// would have fired; the step must still succeed.
+	st := store.NewMem()
+	ba := &blockingApprover{gate: make(chan bool, 1), await: make(chan struct{})}
+	e := &Engine{
+		Execs: map[string]core.Executor{"mock": executor.Mock{Name: "mock"}},
+		WS:    &workspace.Manager{Root: t.TempDir()},
+		Gate:  &gate.Evaluator{Approver: ba, Verifier: gate.CommandVerifier{}},
+		Joins: join.Default(),
+		Store: st, Bus: event.NewBus(), Clock: core.SystemClock{},
+	}
+	f := &flow.Flow{Name: "mg", Steps: []*flow.Step{
+		{ID: "a", Agent: "mock", Timeout: flow.Duration(50 * time.Millisecond),
+			Gate: flow.Gate{Policy: flow.GateManual}},
+	}}
+	mustCreate(t, st, "r1", f)
+
+	done := make(chan error, 1)
+	go func() { done <- e.Run(context.Background(), "r1", f) }()
+	<-ba.await
+	time.Sleep(120 * time.Millisecond) // past the 50ms step timeout
+	ba.gate <- true                    // approve
+	if err := <-done; err != nil {
+		t.Fatalf("manual gate should survive the step timeout, got: %v", err)
+	}
+	got, _ := st.GetRun(context.Background(), "r1")
+	if got.Steps[0].Status != core.StepSucceeded {
+		t.Fatalf("step status = %q, want succeeded", got.Steps[0].Status)
+	}
+}
+
 // blockingApprover blocks Approve until the test sends a decision, so we can
 // assert the step is observably awaiting_gate before it resolves.
 type blockingApprover struct {

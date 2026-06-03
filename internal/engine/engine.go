@@ -239,27 +239,14 @@ func (e *Engine) runStep(ctx context.Context, runID core.RunID, s *flow.Step, in
 		e.transition(ctx, runID, stepState(runID, s.ID, core.StepRunning, attempt, workDir, core.Result{}, nil),
 			event.Event{StepID: s.ID, Kind: event.StepStarted, Attempt: attempt})
 
-		res, execErr := e.execute(ctx, runID, s, inputs, workDir)
+		res, _, execErr := e.attempt(ctx, runID, s, inputs, attempt, workDir)
 		if execErr == nil {
-			res.StepID = s.ID
-			if gateBlocks(s) {
-				e.transition(ctx, runID, stepState(runID, s.ID, core.StepAwaitingGate, attempt, workDir, res, nil),
-					event.Event{StepID: s.ID, Kind: event.GateAwaiting, Attempt: attempt})
-			}
-			ok, gerr := e.Gate.Evaluate(ctx, runID, s, res, workDir)
-			switch {
-			case gerr != nil:
-				execErr = gerr
-			case !ok:
-				execErr = fmt.Errorf("gate failed (policy=%q)", gatePolicyOf(s))
-			default:
-				e.transition(ctx, runID, stepState(runID, s.ID, core.StepSucceeded, attempt, workDir, res, nil),
-					event.Event{StepID: s.ID, Kind: event.StepDone, Summary: res.Summary, CostUSD: res.CostUSD, Attempt: attempt})
-				return res, nil
-			}
+			e.transition(ctx, runID, stepState(runID, s.ID, core.StepSucceeded, attempt, workDir, res, nil),
+				event.Event{StepID: s.ID, Kind: event.StepDone, Summary: res.Summary, CostUSD: res.CostUSD, Attempt: attempt})
+			return res, nil
 		}
-
 		lastErr = execErr
+
 		if attempt < maxAttempts && s.Retry != nil {
 			continue // retry (covers both execution and gate failures)
 		}
@@ -270,14 +257,50 @@ func (e *Engine) runStep(ctx context.Context, runID core.RunID, s *flow.Step, in
 	return core.Result{}, lastErr
 }
 
-// execute runs the step's work: a join strategy for fan-in steps, otherwise the
-// named executor. A per-step timeout wraps the call when set.
-func (e *Engine) execute(ctx context.Context, runID core.RunID, s *flow.Step, inputs []core.Artifact, workDir string) (core.Result, error) {
-	if s.Timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, time.Duration(s.Timeout))
-		defer cancel()
+// withTimeout returns a child context bounded by d, or the parent + a no-op cancel
+// when d is unset. The no-op keeps callers' `defer cancel()` unconditional.
+func withTimeout(ctx context.Context, d flow.Duration) (context.Context, context.CancelFunc) {
+	if d > 0 {
+		return context.WithTimeout(ctx, time.Duration(d))
 	}
+	return ctx, func() {}
+}
+
+// attempt runs one execute + gate. The per-step timeout bounds the executor and an
+// AUTO gate's verifier (the automated work); a manual/conditional gate's approval
+// runs on the un-timed parent ctx. gateFailed distinguishes a gate verdict from an
+// executor/infra error so runStep can decide escalation.
+func (e *Engine) attempt(ctx context.Context, runID core.RunID, s *flow.Step, inputs []core.Artifact, attemptNum int, workDir string) (res core.Result, gateFailed bool, err error) {
+	attemptCtx, cancel := withTimeout(ctx, s.Timeout)
+	defer cancel()
+
+	res, err = e.execute(attemptCtx, runID, s, inputs, workDir)
+	if err != nil {
+		return core.Result{}, false, err
+	}
+	res.StepID = s.ID
+
+	gateCtx := ctx // manual/conditional approval is NOT timed out
+	if gatePolicyOf(s) == flow.GateAuto {
+		gateCtx = attemptCtx // the verifier shares the step timeout
+	} else if gateBlocks(s) {
+		e.transition(ctx, runID, stepState(runID, s.ID, core.StepAwaitingGate, attemptNum, workDir, res, nil),
+			event.Event{StepID: s.ID, Kind: event.GateAwaiting, Attempt: attemptNum})
+	}
+	ok, gerr := e.Gate.Evaluate(gateCtx, runID, s, res, workDir)
+	switch {
+	case gerr != nil:
+		return res, false, gerr
+	case !ok:
+		return res, true, fmt.Errorf("gate failed (policy=%q)", gatePolicyOf(s))
+	default:
+		return res, false, nil
+	}
+}
+
+// execute runs the step's work: a join strategy for fan-in steps, otherwise the
+// named executor. The caller (attempt) bounds this by the step timeout.
+func (e *Engine) execute(ctx context.Context, runID core.RunID, s *flow.Step, inputs []core.Artifact, workDir string) (core.Result, error) {
 	if s.Join != nil {
 		strat, ok := e.Joins[s.Join.Strategy]
 		if !ok {

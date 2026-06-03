@@ -434,3 +434,20 @@ is stdlib.
   the same `Executor` port.
 - **Scheduler** replacing the global semaphore for fairness/priority.
 - **`/metrics`**, webhooks, a web UI — all additive subscribers on the event bus.
+
+## 17. M2 follow-ups (surfaced during M1 code review)
+
+Two minor, non-blocking items found while reviewing M1; both only bite once
+SQLite (M2) replaces the in-memory store, so they are deferred to the M2 plan:
+
+- **`Store.GetRun` must deep-copy the returned `Steps`/`Artifacts` slices.** The
+  in-memory `GetRun` returns a struct copy whose slices still alias the store's
+  internal arrays. Harmless in M1 (callers are read-only and run after the engine
+  has joined), but a latent data race once runs are queried concurrently with
+  execution. The SQLite store naturally returns fresh slices; ensure any
+  in-memory store kept for tests copies them too.
+- **`engine.transition` should not publish the original event when the store
+  write fails.** Today, on a `SaveStepTransition` error it emits a `step.failed`
+  "store: …" frame *and* the original event. The in-memory store never fails, so
+  this is moot in M1; under SQLite, publishing an event that was not durably
+  persisted contradicts persist-then-publish. Fix: `return` after the error frame.

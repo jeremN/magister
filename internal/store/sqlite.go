@@ -19,6 +19,8 @@ import (
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
+var _ core.Store = (*SQLite)(nil)
+
 // SQLite is a durable core.Store backed by one SQLite database file in WAL mode.
 // SQLite allows a single writer at a time, so writes go through a dedicated
 // handle capped at one connection (w); reads use a separate pool (r) that WAL
@@ -228,6 +230,30 @@ func (s *SQLite) SaveStepTransition(ctx context.Context, st core.StepState, evs 
 		}
 	}
 	return tx.Commit()
+}
+
+func (s *SQLite) LoadIncompleteRuns(ctx context.Context) ([]core.RunState, error) {
+	rows, err := s.qr.ListIncompleteRuns(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]core.RunState, 0, len(rows))
+	for _, r := range rows {
+		steps, err := s.loadSteps(ctx, core.RunID(r.ID))
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, core.RunState{
+			ID:          core.RunID(r.ID),
+			Name:        r.Name,
+			FlowYAML:    r.FlowYaml,
+			Status:      core.RunStatus(r.Status),
+			Concurrency: int(r.Concurrency),
+			Err:         r.Error,
+			Steps:       steps,
+		})
+	}
+	return out, nil
 }
 
 func (s *SQLite) EventsSince(ctx context.Context, id core.RunID, seq int64) ([]event.Event, error) {

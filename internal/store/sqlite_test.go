@@ -185,3 +185,51 @@ func TestSQLiteRejectsEventForUnknownRun(t *testing.T) {
 		t.Fatal("expected FK violation for unknown run, got nil")
 	}
 }
+
+func TestSQLiteLoadIncompleteRuns(t *testing.T) {
+	ctx := context.Background()
+	s := tempDB(t)
+
+	// r1: running, with a succeeded step (+artifact) and a running step.
+	if err := s.CreateRun(ctx, core.RunState{ID: "r1", Name: "f", FlowYAML: "yaml1", Status: core.RunRunning, Concurrency: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveStepTransition(ctx,
+		core.StepState{RunID: "r1", StepID: "a", Status: core.StepSucceeded, Attempt: 1,
+			Artifacts: []core.Artifact{{StepID: "a", Path: "/w/a.md"}}},
+		nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveStepTransition(ctx,
+		core.StepState{RunID: "r1", StepID: "b", Status: core.StepRunning, Attempt: 1}, nil); err != nil {
+		t.Fatal(err)
+	}
+	// r2: succeeded — must NOT be returned.
+	if err := s.CreateRun(ctx, core.RunState{ID: "r2", Name: "done", FlowYAML: "yaml2", Status: core.RunSucceeded}); err != nil {
+		t.Fatal(err)
+	}
+
+	inc, err := s.LoadIncompleteRuns(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inc) != 1 || inc[0].ID != "r1" {
+		t.Fatalf("want only r1 incomplete, got %+v", inc)
+	}
+	r := inc[0]
+	if r.FlowYAML != "yaml1" || r.Concurrency != 2 {
+		t.Errorf("run fields not loaded: %+v", r)
+	}
+	if len(r.Steps) != 2 {
+		t.Fatalf("want 2 steps, got %d", len(r.Steps))
+	}
+	var a core.StepState
+	for _, st := range r.Steps {
+		if st.StepID == "a" {
+			a = st
+		}
+	}
+	if a.Status != core.StepSucceeded || len(a.Artifacts) != 1 || a.Artifacts[0].Path != "/w/a.md" {
+		t.Errorf("succeeded step's artifacts not loaded for resume: %+v", a)
+	}
+}

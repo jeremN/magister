@@ -275,3 +275,76 @@ func TestTransitionDoesNotPublishOriginalOnStoreError(t *testing.T) {
 		t.Errorf("expected store-error frame, got %+v", got[0])
 	}
 }
+
+// blockingApprover blocks Approve until the test sends a decision, so we can
+// assert the step is observably awaiting_gate before it resolves.
+type blockingApprover struct {
+	gate  chan bool // test sends the approve/reject decision
+	await chan struct{}
+}
+
+func (b *blockingApprover) Approve(ctx context.Context, _ core.RunID, _ *flow.Step, _ core.Result) (bool, error) {
+	close(b.await) // signal that we've entered the gate
+	select {
+	case ok := <-b.gate:
+		return ok, nil
+	case <-ctx.Done():
+		return false, ctx.Err()
+	}
+}
+
+func TestEngineEmitsAwaitingGateAndBlocks(t *testing.T) {
+	st := store.NewMem()
+	bus := event.NewBus()
+	ch, unsub := bus.Subscribe(32)
+	defer unsub()
+	ba := &blockingApprover{gate: make(chan bool, 1), await: make(chan struct{})}
+
+	e := &Engine{
+		Execs: map[string]core.Executor{"mock": executor.Mock{Name: "mock"}},
+		WS:    &workspace.Manager{Root: t.TempDir()},
+		Gate:  &gate.Evaluator{Approver: ba, Verifier: gate.CommandVerifier{}},
+		Joins: join.Default(),
+		Store: st, Bus: bus, Clock: core.SystemClock{},
+	}
+	f := &flow.Flow{Name: "f", Steps: []*flow.Step{
+		{ID: "a", Agent: "mock", Gate: flow.Gate{Policy: flow.GateManual}},
+	}}
+	if err := st.CreateRun(context.Background(), core.RunState{ID: "r1", Name: "f", FlowYAML: "x", Status: core.RunPending}); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- e.Run(context.Background(), "r1", f) }()
+
+	<-ba.await // the step has entered the gate
+	// the step must be persisted as awaiting_gate while blocked
+	got, err := st.GetRun(context.Background(), "r1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Steps) != 1 || got.Steps[0].Status != core.StepAwaitingGate {
+		t.Fatalf("step should be awaiting_gate while blocked, got %+v", got.Steps)
+	}
+
+	ba.gate <- true // approve
+	if err := <-done; err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	final, _ := st.GetRun(context.Background(), "r1")
+	if final.Steps[0].Status != core.StepSucceeded {
+		t.Errorf("approved step should be succeeded, got %s", final.Steps[0].Status)
+	}
+
+	// a gate.awaiting frame must have been published
+	unsub()
+	var sawAwaiting bool
+	for ev := range ch {
+		if ev.Kind == event.GateAwaiting {
+			sawAwaiting = true
+		}
+	}
+	if !sawAwaiting {
+		t.Error("expected a gate.awaiting event")
+	}
+}

@@ -219,6 +219,10 @@ func (e *Engine) runStep(ctx context.Context, runID core.RunID, s *flow.Step, in
 		res, execErr := e.execute(ctx, runID, s, inputs, workDir)
 		if execErr == nil {
 			res.StepID = s.ID
+			if gateBlocks(s) {
+				e.transition(ctx, runID, stepState(runID, s.ID, core.StepAwaitingGate, attempt, workDir, res, nil),
+					event.Event{StepID: s.ID, Kind: event.GateAwaiting, Attempt: attempt})
+			}
 			ok, gerr := e.Gate.Evaluate(ctx, runID, s, res, workDir)
 			switch {
 			case gerr != nil:
@@ -325,6 +329,17 @@ func gatePolicyOf(s *flow.Step) flow.GatePolicy {
 		return flow.GateManual
 	}
 	return s.Gate.Policy
+}
+
+// gateBlocks reports whether a step's gate can block on human approval. Auto
+// gates resolve synchronously via the verifier and never block.
+func gateBlocks(s *flow.Step) bool {
+	switch gatePolicyOf(s) {
+	case flow.GateManual, flow.GateConditional:
+		return true
+	default:
+		return false
+	}
 }
 
 var discardLogger = slog.New(slog.NewTextHandler(io.Discard, nil))

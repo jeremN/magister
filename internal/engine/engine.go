@@ -71,7 +71,11 @@ func (e *Engine) runDAG(parent context.Context, runID core.RunID, f *flow.Flow, 
 	if err := e.Store.SetRunStatus(ctx, runID, core.RunRunning, ""); err != nil {
 		e.logger().Error("set run status running", "run", runID, "err", err)
 	}
-	e.Bus.Publish(event.Event{RunID: string(runID), Kind: event.RunStarted, At: e.Clock.Now()})
+	runStartedEv := event.Event{RunID: string(runID), Kind: event.RunStarted, At: e.Clock.Now()}
+	if err := e.Store.AppendEvents(ctx, runID, []event.Event{runStartedEv}); err != nil {
+		e.logger().Error("append run started event", "run", runID, "err", err)
+	}
+	e.Bus.Publish(runStartedEv)
 
 	// per-run cap (0 = unlimited within the global semaphore)
 	var perRun chan struct{}
@@ -173,19 +177,31 @@ func (e *Engine) runDAG(parent context.Context, runID core.RunID, f *flow.Flow, 
 		if err := e.Store.SetRunStatus(final, runID, core.RunCanceled, "canceled"); err != nil {
 			e.logger().Error("set run status canceled", "run", runID, "err", err)
 		}
-		e.Bus.Publish(event.Event{RunID: string(runID), Kind: event.RunDone, Err: "canceled", At: e.Clock.Now()})
+		runDoneEv := event.Event{RunID: string(runID), Kind: event.RunDone, Err: "canceled", At: e.Clock.Now()}
+		if err := e.Store.AppendEvents(final, runID, []event.Event{runDoneEv}); err != nil {
+			e.logger().Error("append run done event", "run", runID, "err", err)
+		}
+		e.Bus.Publish(runDoneEv)
 		return parent.Err()
 	case firstErr != nil:
 		if err := e.Store.SetRunStatus(final, runID, core.RunFailed, firstErr.Error()); err != nil {
 			e.logger().Error("set run status failed", "run", runID, "err", err)
 		}
-		e.Bus.Publish(event.Event{RunID: string(runID), Kind: event.RunDone, Err: firstErr.Error(), At: e.Clock.Now()})
+		runDoneEv := event.Event{RunID: string(runID), Kind: event.RunDone, Err: firstErr.Error(), At: e.Clock.Now()}
+		if err := e.Store.AppendEvents(final, runID, []event.Event{runDoneEv}); err != nil {
+			e.logger().Error("append run done event", "run", runID, "err", err)
+		}
+		e.Bus.Publish(runDoneEv)
 		return firstErr
 	default:
 		if err := e.Store.SetRunStatus(final, runID, core.RunSucceeded, ""); err != nil {
 			e.logger().Error("set run status succeeded", "run", runID, "err", err)
 		}
-		e.Bus.Publish(event.Event{RunID: string(runID), Kind: event.RunDone, At: e.Clock.Now()})
+		runDoneEv := event.Event{RunID: string(runID), Kind: event.RunDone, At: e.Clock.Now()}
+		if err := e.Store.AppendEvents(final, runID, []event.Event{runDoneEv}); err != nil {
+			e.logger().Error("append run done event", "run", runID, "err", err)
+		}
+		e.Bus.Publish(runDoneEv)
 		return nil
 	}
 }

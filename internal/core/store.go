@@ -49,6 +49,9 @@ type Store interface {
 	CreateRun(ctx context.Context, r RunState) error
 	SaveStepTransition(ctx context.Context, st StepState, evs []event.Event) error
 	SetRunStatus(ctx context.Context, id RunID, status RunStatus, errMsg string) error
+	// AppendEvents persists run-level events (e.g. run.started, run.done) that
+	// have no associated step transition. The SSE hub reads via EventsSince.
+	AppendEvents(ctx context.Context, id RunID, evs []event.Event) error
 	LoadIncompleteRuns(ctx context.Context) ([]RunState, error)
 	GetRun(ctx context.Context, id RunID) (RunState, error)
 	ListRuns(ctx context.Context, f Filter) ([]RunSummary, error)

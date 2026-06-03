@@ -98,6 +98,24 @@ func (s *SQLite) SetRunStatus(ctx context.Context, id core.RunID, status core.Ru
 	})
 }
 
+func (s *SQLite) AppendEvents(ctx context.Context, id core.RunID, evs []event.Event) error {
+	for _, e := range evs {
+		if _, err := s.qw.InsertEvent(ctx, sqldb.InsertEventParams{
+			RunID:   string(id),
+			StepID:  e.StepID,
+			Kind:    string(e.Kind),
+			Summary: e.Summary,
+			CostUsd: e.CostUSD,
+			Attempt: int64(e.Attempt),
+			Error:   e.Err,
+			At:      e.At.UTC().Format(time.RFC3339Nano),
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *SQLite) GetRun(ctx context.Context, id core.RunID) (core.RunState, error) {
 	row, err := s.qr.GetRun(ctx, string(id))
 	if err != nil {

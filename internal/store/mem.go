@@ -77,6 +77,20 @@ func (m *Mem) SetRunStatus(_ context.Context, id core.RunID, status core.RunStat
 	return nil
 }
 
+func (m *Mem) AppendEvents(_ context.Context, id core.RunID, evs []event.Event) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.runs[id]; !ok {
+		return fmt.Errorf("unknown run %q", id)
+	}
+	for _, e := range evs {
+		m.seq++
+		e.Seq = m.seq
+		m.events[id] = append(m.events[id], e)
+	}
+	return nil
+}
+
 // LoadIncompleteRuns returns every run still pending or running, deep-copied,
 // so it mirrors the SQLite store and stays a faithful test double for resume.
 func (m *Mem) LoadIncompleteRuns(context.Context) ([]core.RunState, error) {

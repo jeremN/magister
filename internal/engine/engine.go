@@ -36,10 +36,35 @@ type Engine struct {
 	Log   *slog.Logger // non-fatal store/bus failures; nil = discard (M3 wires a real handler)
 }
 
-// Run executes one flow to completion. The first failing step cancels the run's
-// context and the rest tear down. The run row must already exist in the store
-// (the caller creates it); Run drives its status and all step transitions.
+// Run executes one flow to completion from scratch. The run row must already
+// exist in the store (the caller creates it); Run drives its status and all step
+// transitions. The first failing step cancels the run's context; the rest unwind.
 func (e *Engine) Run(parent context.Context, runID core.RunID, f *flow.Flow) error {
+	return e.runDAG(parent, runID, f, nil)
+}
+
+// Resume continues an interrupted run. Steps already 'succeeded' in rs are not
+// re-executed — their persisted artifacts seed downstream inputs; every other
+// step is (re-)run from a fresh attempt. This is at-least-once (spec §7): a step
+// that was mid-flight at crash runs again.
+func (e *Engine) Resume(parent context.Context, rs core.RunState, f *flow.Flow) error {
+	seed := make(map[string]core.Result, len(rs.Steps))
+	for _, st := range rs.Steps {
+		if st.Status == core.StepSucceeded {
+			seed[st.StepID] = core.Result{
+				StepID:    st.StepID,
+				Summary:   st.Summary,
+				CostUSD:   st.CostUSD,
+				Artifacts: st.Artifacts,
+			}
+		}
+	}
+	return e.runDAG(parent, rs.ID, f, seed)
+}
+
+// runDAG is the shared executor for Run and Resume. seed pre-completes steps:
+// their results are available to dependents and they are not executed.
+func (e *Engine) runDAG(parent context.Context, runID core.RunID, f *flow.Flow, seed map[string]core.Result) error {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 
@@ -66,6 +91,9 @@ func (e *Engine) Run(parent context.Context, runID core.RunID, f *flow.Flow) err
 		errOnce  sync.Once
 		wg       sync.WaitGroup
 	)
+	for id, res := range seed { // pre-completed steps from a prior run
+		results[id] = res
+	}
 	fail := func(err error) {
 		errOnce.Do(func() {
 			firstErr = err
@@ -79,6 +107,11 @@ func (e *Engine) Run(parent context.Context, runID core.RunID, f *flow.Flow) err
 		go func() {
 			defer wg.Done()
 			defer close(done[s.ID]) // always unblock dependents, even on bail-out
+
+			// already completed on a prior run: inputs are seeded, skip execution.
+			if _, ok := seed[s.ID]; ok {
+				return
+			}
 
 			// 1. wait for dependencies (holding NO concurrency token).
 			for _, dep := range s.Needs {

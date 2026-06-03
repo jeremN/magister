@@ -451,3 +451,8 @@ SQLite (M2) replaces the in-memory store, so they are deferred to the M2 plan:
   "store: …" frame *and* the original event. The in-memory store never fails, so
   this is moot in M1; under SQLite, publishing an event that was not durably
   persisted contradicts persist-then-publish. Fix: `return` after the error frame.
+- **`engine.Run` should not silently discard `SetRunStatus` errors.** The run-status
+  writes (`RunRunning`/`RunSucceeded`/`RunFailed`/`RunCanceled`) use `_ =`. The
+  in-memory store only errors on an unknown run id (which cannot happen here), so
+  it's moot in M1; under SQLite (M2) + `slog` (M3) these failures should be logged
+  to honor §11 ("no silent failures"). Bundle with the M2 store work.

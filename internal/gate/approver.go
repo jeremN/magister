@@ -13,12 +13,12 @@ import (
 // Approver resolves a manual gate. The service (M3) supplies an Approver backed
 // by the API approval registry; AutoApprover backs the keyless demo and tests.
 type Approver interface {
-	Approve(ctx context.Context, step *flow.Step, res core.Result) (bool, error)
+	Approve(ctx context.Context, runID core.RunID, step *flow.Step, res core.Result) (bool, error)
 }
 
 // AutoApprover passes every manual gate.
 type AutoApprover struct{}
 
-func (AutoApprover) Approve(context.Context, *flow.Step, core.Result) (bool, error) {
+func (AutoApprover) Approve(context.Context, core.RunID, *flow.Step, core.Result) (bool, error) {
 	return true, nil
 }

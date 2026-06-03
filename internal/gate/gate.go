@@ -15,12 +15,12 @@ type Evaluator struct {
 	Verifier Verifier
 }
 
-func (e *Evaluator) Evaluate(ctx context.Context, s *flow.Step, res core.Result, workDir string) (bool, error) {
+func (e *Evaluator) Evaluate(ctx context.Context, runID core.RunID, s *flow.Step, res core.Result, workDir string) (bool, error) {
 	switch s.Gate.Policy {
 	case "", flow.GateManual, flow.GateConditional:
 		// M1: conditional falls back to manual approval (parity with the phase-1
 		// prototype). The expr-lang evaluator arrives in M5.
-		return e.Approver.Approve(ctx, s, res)
+		return e.Approver.Approve(ctx, runID, s, res)
 	case flow.GateAuto:
 		ok, err := e.Verifier.Verify(ctx, s.Gate.Verifier.Command, workDir)
 		if err != nil {

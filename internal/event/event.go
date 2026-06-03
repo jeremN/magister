@@ -15,6 +15,7 @@ const (
 	StepDone     Kind = "step.done"
 	StepFailed   Kind = "step.failed"
 	StepRetrying Kind = "step.retrying"
+	GateAwaiting Kind = "gate.awaiting"
 )
 
 // Event is one occurrence during a run. Seq is assigned by the store on persist

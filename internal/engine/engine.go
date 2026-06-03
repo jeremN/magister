@@ -219,7 +219,7 @@ func (e *Engine) runStep(ctx context.Context, runID core.RunID, s *flow.Step, in
 		res, execErr := e.execute(ctx, runID, s, inputs, workDir)
 		if execErr == nil {
 			res.StepID = s.ID
-			ok, gerr := e.Gate.Evaluate(ctx, s, res, workDir)
+			ok, gerr := e.Gate.Evaluate(ctx, runID, s, res, workDir)
 			switch {
 			case gerr != nil:
 				execErr = gerr

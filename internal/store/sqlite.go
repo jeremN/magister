@@ -6,11 +6,13 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/pressly/goose/v3"
 	_ "modernc.org/sqlite"
 
 	"concentus/internal/core"
+	"concentus/internal/event"
 	"concentus/internal/store/sqldb"
 )
 
@@ -171,4 +173,85 @@ func (s *SQLite) loadSteps(ctx context.Context, id core.RunID) ([]core.StepState
 		})
 	}
 	return steps, nil
+}
+
+// SaveStepTransition writes the step row, the step's artifact set, and the
+// event rows in a single transaction (persist-then-publish; spec §6/§8). The
+// writer handle is capped at one connection, so this never contends with itself.
+func (s *SQLite) SaveStepTransition(ctx context.Context, st core.StepState, evs []event.Event) error {
+	tx, err := s.w.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }() // no-op once Commit succeeds
+
+	q := s.qw.WithTx(tx)
+	if err := q.UpsertStep(ctx, sqldb.UpsertStepParams{
+		RunID:   string(st.RunID),
+		ID:      st.StepID,
+		Status:  string(st.Status),
+		Attempt: int64(st.Attempt),
+		Summary: st.Summary,
+		CostUsd: st.CostUSD,
+		Workdir: st.WorkDir,
+		Error:   st.Err,
+	}); err != nil {
+		return err
+	}
+
+	// Artifacts reflect the latest result: replace this step's set.
+	if err := q.DeleteArtifactsForStep(ctx, sqldb.DeleteArtifactsForStepParams{
+		RunID: string(st.RunID), StepID: st.StepID,
+	}); err != nil {
+		return err
+	}
+	for _, a := range st.Artifacts {
+		if err := q.InsertArtifact(ctx, sqldb.InsertArtifactParams{
+			RunID: string(st.RunID), StepID: st.StepID, Path: a.Path,
+		}); err != nil {
+			return err
+		}
+	}
+
+	for _, e := range evs {
+		if _, err := q.InsertEvent(ctx, sqldb.InsertEventParams{
+			RunID:   string(st.RunID),
+			StepID:  e.StepID,
+			Kind:    string(e.Kind),
+			Summary: e.Summary,
+			CostUsd: e.CostUSD,
+			Attempt: int64(e.Attempt),
+			Error:   e.Err,
+			At:      e.At.UTC().Format(time.RFC3339Nano),
+		}); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *SQLite) EventsSince(ctx context.Context, id core.RunID, seq int64) ([]event.Event, error) {
+	rows, err := s.qr.EventsSince(ctx, sqldb.EventsSinceParams{RunID: string(id), Seq: seq})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]event.Event, 0, len(rows))
+	for _, r := range rows {
+		at, err := time.Parse(time.RFC3339Nano, r.At)
+		if err != nil {
+			return nil, fmt.Errorf("event %d: bad timestamp %q: %w", r.Seq, r.At, err)
+		}
+		out = append(out, event.Event{
+			Seq:     r.Seq,
+			RunID:   r.RunID,
+			StepID:  r.StepID,
+			Kind:    event.Kind(r.Kind),
+			Summary: r.Summary,
+			CostUSD: r.CostUsd,
+			Attempt: int(r.Attempt),
+			Err:     r.Error,
+			At:      at,
+		})
+	}
+	return out, nil
 }

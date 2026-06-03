@@ -4,8 +4,10 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"concentus/internal/core"
+	"concentus/internal/event"
 )
 
 func tempDB(t *testing.T) *SQLite {
@@ -107,5 +109,79 @@ func TestSQLiteCreateGetSetListRuns(t *testing.T) {
 
 	if _, err := s.GetRun(ctx, "nope"); err == nil {
 		t.Error("GetRun of unknown id should error")
+	}
+}
+
+func TestSQLiteSaveStepTransitionAndEvents(t *testing.T) {
+	ctx := context.Background()
+	s := tempDB(t)
+	if err := s.CreateRun(ctx, core.RunState{ID: "r1", Name: "f", FlowYAML: "x", Status: core.RunRunning}); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	// running transition: no artifacts yet, one started event.
+	if err := s.SaveStepTransition(ctx,
+		core.StepState{RunID: "r1", StepID: "a", Status: core.StepRunning, Attempt: 1},
+		[]event.Event{{RunID: "r1", StepID: "a", Kind: event.StepStarted, Attempt: 1, At: now}}); err != nil {
+		t.Fatal(err)
+	}
+	// succeeded transition: upserts the same step, adds an artifact + a done event.
+	if err := s.SaveStepTransition(ctx,
+		core.StepState{RunID: "r1", StepID: "a", Status: core.StepSucceeded, Attempt: 1,
+			Summary: "ok", CostUSD: 0.02, WorkDir: "/w",
+			Artifacts: []core.Artifact{{StepID: "a", Path: "/w/a.md"}}},
+		[]event.Event{{RunID: "r1", StepID: "a", Kind: event.StepDone, Summary: "ok", CostUSD: 0.02, Attempt: 1, At: now}}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.GetRun(ctx, "r1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Steps) != 1 {
+		t.Fatalf("want 1 step (upsert, not insert), got %d", len(got.Steps))
+	}
+	st := got.Steps[0]
+	if st.Status != core.StepSucceeded || st.Summary != "ok" || st.CostUSD != 0.02 || st.WorkDir != "/w" {
+		t.Errorf("step not upserted correctly: %+v", st)
+	}
+	if len(st.Artifacts) != 1 || st.Artifacts[0].Path != "/w/a.md" {
+		t.Errorf("artifacts not persisted: %+v", st.Artifacts)
+	}
+
+	evs, err := s.EventsSince(ctx, "r1", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evs) != 2 {
+		t.Fatalf("want 2 events, got %d", len(evs))
+	}
+	if evs[0].Seq != 1 || evs[1].Seq != 2 {
+		t.Errorf("seq not autoincremented: %d, %d", evs[0].Seq, evs[1].Seq)
+	}
+	if !evs[1].At.Equal(now) {
+		t.Errorf("event timestamp round-trip: got %v want %v", evs[1].At, now)
+	}
+	// cursor: only events after seq 1.
+	after, err := s.EventsSince(ctx, "r1", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != 1 || after[0].Kind != event.StepDone {
+		t.Errorf("EventsSince cursor wrong: %+v", after)
+	}
+}
+
+func TestSQLiteRejectsEventForUnknownRun(t *testing.T) {
+	ctx := context.Background()
+	s := tempDB(t)
+	// No CreateRun: the steps.run_id foreign key rejects the orphan transition
+	// (during UpsertStep, before any event is written) — nothing is committed.
+	err := s.SaveStepTransition(ctx,
+		core.StepState{RunID: "ghost", StepID: "a", Status: core.StepRunning},
+		[]event.Event{{RunID: "ghost", StepID: "a", Kind: event.StepStarted, At: time.Now()}})
+	if err == nil {
+		t.Fatal("expected FK violation for unknown run, got nil")
 	}
 }

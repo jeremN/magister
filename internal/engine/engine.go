@@ -71,6 +71,9 @@ func (e *Engine) runDAG(parent context.Context, runID core.RunID, f *flow.Flow, 
 	if err := e.Store.SetRunStatus(ctx, runID, core.RunRunning, ""); err != nil {
 		e.logger().Error("set run status running", "run", runID, "err", err)
 	}
+	// Persist run-level events (no associated step) so the SSE hub can replay
+	// them from the store with real seqs. A Resume re-runs runDAG, so a resumed
+	// run records a second run.started — consistent with at-least-once (§7).
 	runStartedEv := event.Event{RunID: string(runID), Kind: event.RunStarted, At: e.Clock.Now()}
 	if err := e.Store.AppendEvents(ctx, runID, []event.Event{runStartedEv}); err != nil {
 		e.logger().Error("append run started event", "run", runID, "err", err)

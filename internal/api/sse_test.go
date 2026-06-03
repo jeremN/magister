@@ -61,7 +61,10 @@ func TestSSEReplayWithLastEventID(t *testing.T) {
 	// reconnect asking for events after seq 1 → must not include seq 1
 	ereq, _ := http.NewRequest(http.MethodGet, hs.URL+"/v1/runs/"+string(rr.ID)+"/events", nil)
 	ereq.Header.Set("Last-Event-ID", "1")
-	eresp, _ := http.DefaultClient.Do(ereq)
+	eresp, err := http.DefaultClient.Do(ereq)
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer eresp.Body.Close()
 	sc := bufio.NewScanner(eresp.Body)
 	for sc.Scan() {

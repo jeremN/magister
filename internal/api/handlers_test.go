@@ -72,7 +72,10 @@ func TestPostRunCreatesAndCompletes(t *testing.T) {
 	waitForStatus(t, st, rr.ID, core.RunSucceeded)
 
 	// GET snapshot reflects it
-	gresp, _ := http.Get(hs.URL + "/v1/runs/" + string(rr.ID))
+	gresp, err := http.Get(hs.URL + "/v1/runs/" + string(rr.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer gresp.Body.Close()
 	if gresp.StatusCode != http.StatusOK {
 		t.Fatalf("GET snapshot = %d", gresp.StatusCode)
@@ -86,7 +89,10 @@ func TestPostRunCreatesAndCompletes(t *testing.T) {
 
 func TestPostRunRejectsInvalidFlow(t *testing.T) {
 	hs, _, _ := testServer(t)
-	resp, _ := http.Post(hs.URL+"/v1/runs", "application/x-yaml", bytes.NewBufferString("name: \nsteps: []\n"))
+	resp, err := http.Post(hs.URL+"/v1/runs", "application/x-yaml", bytes.NewBufferString("name: \nsteps: []\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("invalid flow = %d, want 400", resp.StatusCode)
@@ -95,7 +101,10 @@ func TestPostRunRejectsInvalidFlow(t *testing.T) {
 
 func TestGetUnknownRun404(t *testing.T) {
 	hs, _, _ := testServer(t)
-	resp, _ := http.Get(hs.URL + "/v1/runs/nope")
+	resp, err := http.Get(hs.URL + "/v1/runs/nope")
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("unknown run = %d, want 404", resp.StatusCode)
@@ -134,7 +143,10 @@ func TestApproveReleasesManualGate(t *testing.T) {
 
 func TestHealthz(t *testing.T) {
 	hs, _, _ := testServer(t)
-	resp, _ := http.Get(hs.URL + "/healthz")
+	resp, err := http.Get(hs.URL + "/healthz")
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("healthz = %d", resp.StatusCode)

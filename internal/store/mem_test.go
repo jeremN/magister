@@ -88,3 +88,30 @@ func TestMemGetRunDeepCopiesSlices(t *testing.T) {
 		t.Errorf("artifact path mutated through returned slice: %s", again.Steps[0].Artifacts[0].Path)
 	}
 }
+
+func TestMemLoadIncompleteRuns(t *testing.T) {
+	ctx := context.Background()
+	m := NewMem()
+	if err := m.CreateRun(ctx, core.RunState{ID: "r1", Name: "a", Status: core.RunRunning}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.CreateRun(ctx, core.RunState{ID: "r2", Name: "b", Status: core.RunPending}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.CreateRun(ctx, core.RunState{ID: "r3", Name: "c", Status: core.RunSucceeded}); err != nil {
+		t.Fatal(err)
+	}
+
+	inc, err := m.LoadIncompleteRuns(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inc) != 2 { // r1 (running) + r2 (pending); r3 (succeeded) excluded
+		t.Fatalf("want 2 incomplete runs, got %d: %+v", len(inc), inc)
+	}
+	for _, r := range inc {
+		if r.Status != core.RunRunning && r.Status != core.RunPending {
+			t.Errorf("run %q has terminal status %s in incomplete set", r.ID, r.Status)
+		}
+	}
+}

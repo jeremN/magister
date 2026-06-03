@@ -77,9 +77,18 @@ func (m *Mem) SetRunStatus(_ context.Context, id core.RunID, status core.RunStat
 	return nil
 }
 
+// LoadIncompleteRuns returns every run still pending or running, deep-copied,
+// so it mirrors the SQLite store and stays a faithful test double for resume.
 func (m *Mem) LoadIncompleteRuns(context.Context) ([]core.RunState, error) {
-	// M1 is single-process and non-resuming; nothing to load. Resume lands in M2.
-	return nil, nil
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []core.RunState
+	for _, r := range m.runs {
+		if r.Status == core.RunPending || r.Status == core.RunRunning {
+			out = append(out, cloneRun(r))
+		}
+	}
+	return out, nil
 }
 
 func (m *Mem) GetRun(_ context.Context, id core.RunID) (core.RunState, error) {
@@ -89,13 +98,20 @@ func (m *Mem) GetRun(_ context.Context, id core.RunID) (core.RunState, error) {
 	if !ok {
 		return core.RunState{}, fmt.Errorf("unknown run %q", id)
 	}
+	return cloneRun(r), nil
+}
+
+// cloneRun returns a deep copy whose Steps/Artifacts slices share nothing with
+// the store's internal arrays, so callers can read concurrently with execution
+// without racing (spec §17).
+func cloneRun(r *core.RunState) core.RunState {
 	out := *r
 	out.Steps = make([]core.StepState, len(r.Steps))
 	for i, st := range r.Steps {
 		st.Artifacts = append([]core.Artifact(nil), st.Artifacts...)
 		out.Steps[i] = st
 	}
-	return out, nil
+	return out
 }
 
 func (m *Mem) ListRuns(_ context.Context, f core.Filter) ([]core.RunSummary, error) {

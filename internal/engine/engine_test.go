@@ -276,6 +276,49 @@ func TestTransitionDoesNotPublishOriginalOnStoreError(t *testing.T) {
 	}
 }
 
+// recordingClock records each duration passed to After (which fires immediately,
+// so tests never sleep) — used to assert the exact backoff schedule.
+type recordingClock struct{ durs []time.Duration }
+
+func (c *recordingClock) Now() time.Time { return time.Unix(0, 0) }
+func (c *recordingClock) After(d time.Duration) <-chan time.Time {
+	c.durs = append(c.durs, d)
+	ch := make(chan time.Time, 1)
+	ch <- time.Unix(0, 0)
+	return ch
+}
+
+func TestBackoffJitterAndCap(t *testing.T) {
+	clk := &recordingClock{}
+	// Rand fixed at 0.5 → jittered sleep is exactly half the (capped) ceiling.
+	e := &Engine{Clock: clk, Rand: func() float64 { return 0.5 }}
+	s := &flow.Step{Retry: &flow.RetryPolicy{Max: 200, Backoff: flow.Duration(time.Second)}}
+
+	for _, attempt := range []int{2, 3, 4, 7, 200} {
+		if !e.backoff(context.Background(), s, attempt) {
+			t.Fatalf("backoff(attempt=%d) returned false", attempt)
+		}
+	}
+	// attempt 2 → 1s, 3 → 2s, 4 → 4s (all ×0.5); attempt 7 → 32s clamps to 30s cap
+	// (natural cap, no overflow) ×0.5 = 15s; attempt 200 overflows the shift and
+	// clamps to maxBackoff=30s (×0.5 = 15s).
+	want := []time.Duration{
+		500 * time.Millisecond,
+		1 * time.Second,
+		2 * time.Second,
+		15 * time.Second, // attempt 7: 32s clamps to 30s cap (natural cap, no overflow)
+		15 * time.Second, // attempt 200: overflow clamps to 30s cap
+	}
+	if len(clk.durs) != len(want) {
+		t.Fatalf("recorded %d durations, want %d: %v", len(clk.durs), len(want), clk.durs)
+	}
+	for i, w := range want {
+		if clk.durs[i] != w {
+			t.Errorf("durs[%d] = %v, want %v", i, clk.durs[i], w)
+		}
+	}
+}
+
 // blockingApprover blocks Approve until the test sends a decision, so we can
 // assert the step is observably awaiting_gate before it resolves.
 type blockingApprover struct {

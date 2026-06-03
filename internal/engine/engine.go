@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math/rand/v2" // nosemgrep: go.lang.security.audit.crypto.math_random.math-random-used
 	"sync"
 	"time"
 
@@ -33,7 +34,10 @@ type Engine struct {
 	Bus   core.Publisher
 	Sem   *semaphore.Weighted // global concurrency cap; nil = unbounded
 	Clock core.Clock
-	Log   *slog.Logger // non-fatal store/bus failures; nil = discard (M3 wires a real handler)
+	// Rand returns a jitter factor in [0,1); nil defaults to math/rand/v2 (auto-seeded).
+	// Injected so backoff is deterministic in tests, mirroring Clock.
+	Rand func() float64
+	Log  *slog.Logger // non-fatal store/bus failures; nil = discard (M3 wires a real handler)
 }
 
 // Run executes one flow to completion from scratch. The run row must already
@@ -295,14 +299,33 @@ func (e *Engine) execute(ctx context.Context, runID core.RunID, s *flow.Step, in
 	})
 }
 
+// maxBackoff caps exponential backoff before jitter, so a high retry count can't
+// schedule an unbounded sleep.
+const maxBackoff = 30 * time.Second
+
+func (e *Engine) randFloat() float64 {
+	if e.Rand != nil {
+		return e.Rand()
+	}
+	return rand.Float64()
+}
+
 // backoff sleeps before a retry using the injected clock. Returns false if the
-// context was canceled while waiting. Exponential; jitter arrives in M4.
+// context was canceled while waiting. Exponential, clamped to maxBackoff, with
+// full jitter (sleep ∈ [0, ceiling)) to spread concurrent retries.
 func (e *Engine) backoff(ctx context.Context, s *flow.Step, attempt int) bool {
 	if s.Retry == nil || s.Retry.Backoff <= 0 {
 		return true
 	}
 	base := time.Duration(s.Retry.Backoff)
+	if attempt < 2 {
+		attempt = 2 // attempt 1 has no prior failure to back off from; guards a negative shift
+	}
 	d := base * (1 << (attempt - 2)) // attempt 2 → base, 3 → 2×base, …
+	if d > maxBackoff || d <= 0 {    // d<=0 guards int64 overflow on huge attempt counts
+		d = maxBackoff
+	}
+	d = time.Duration(e.randFloat() * float64(d)) // full jitter
 	select {
 	case <-e.Clock.After(d):
 		return true

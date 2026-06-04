@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"concentus/internal/executor"
 )
 
 func TestRunServesHealthzAndShutsDown(t *testing.T) {
@@ -37,5 +39,22 @@ func TestRunServesHealthzAndShutsDown(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("daemon did not shut down")
+	}
+}
+
+func TestAgentsRegistry(t *testing.T) {
+	m := agents()
+	if _, ok := m["mock"]; !ok {
+		t.Error("mock agent must remain registered (keyless flows)")
+	}
+	opus, ok := m["opus"].(*executor.CLIAgent)
+	if !ok {
+		t.Fatalf("opus = %T, want *executor.CLIAgent", m["opus"])
+	}
+	if opus.Bin != "claude" || opus.Model != "opus" {
+		t.Errorf("opus agent = {Bin:%q Model:%q}, want claude/opus", opus.Bin, opus.Model)
+	}
+	if sonnet, ok := m["sonnet"].(*executor.CLIAgent); !ok || sonnet.Model != "sonnet" {
+		t.Errorf("sonnet agent wrong: %#v", m["sonnet"])
 	}
 }

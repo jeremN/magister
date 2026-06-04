@@ -40,6 +40,17 @@ func main() {
 	}
 }
 
+// agents is the daemon's executor registry: the keyless mock plus claude-backed
+// opus/sonnet. A flow using opus/sonnet needs `claude` on PATH + ANTHROPIC_API_KEY;
+// mock flows need neither. (gemini/codex arrive in a later slice.)
+func agents() map[string]core.Executor {
+	return map[string]core.Executor{
+		"mock":   executor.Mock{Name: "mock"},
+		"opus":   executor.Claude("opus"),
+		"sonnet": executor.Claude("sonnet"),
+	}
+}
+
 // run is the testable daemon body. It serves until stopCh closes, then drains.
 // onListen (optional) is called with the bound address once serving begins.
 func run(args []string, env func(string) string, stopCh <-chan struct{}, onListen func(addr string)) error {
@@ -55,7 +66,7 @@ func run(args []string, env func(string) string, stopCh <-chan struct{}, onListe
 	reg := supervisor.NewApprovalRegistry()
 	bus := event.NewBus()
 	eng := &engine.Engine{
-		Execs: map[string]core.Executor{"mock": executor.Mock{Name: "mock"}}, // real CLIAgents arrive in M4
+		Execs: agents(),
 		WS:    &workspace.GitManager{Root: filepath.Join(filepath.Dir(cfg.DBPath), "runs")},
 		Gate:  &gate.Evaluator{Approver: &supervisor.RegistryApprover{Reg: reg}, Verifier: gate.CommandVerifier{}},
 		Joins: join.Default(),

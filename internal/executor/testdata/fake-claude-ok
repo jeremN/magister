@@ -1,0 +1,5 @@
+#!/bin/sh
+# Fake `claude`: write a file into cwd (simulating an edit), print a success JSON
+# result, exit 0. Used by CLIAgent runner tests — no API key, no network.
+echo "stub wrote this" > agent-output.txt
+printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"stub done","total_cost_usd":0.02}'

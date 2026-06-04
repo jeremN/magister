@@ -54,3 +54,9 @@ func truncate(b []byte, n int) string {
 	}
 	return s
 }
+
+// Claude returns a CLIAgent backed by the `claude` CLI for the given model alias
+// (e.g. "opus", "sonnet"). Env defaults to os.Environ() (carries ANTHROPIC_API_KEY).
+func Claude(model string) *CLIAgent {
+	return &CLIAgent{Bin: "claude", Model: model, Spec: ClaudeSpec{}}
+}

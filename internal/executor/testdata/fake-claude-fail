@@ -1,0 +1,4 @@
+#!/bin/sh
+# Fake `claude` that fails: write to stderr, exit non-zero.
+echo "boom: simulated agent failure" >&2
+exit 3

@@ -3,6 +3,8 @@ package supervisor
 import (
 	"context"
 	"fmt"
+	"io"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -20,6 +22,9 @@ type Supervisor struct {
 	engine *engine.Engine
 	store  core.Store
 	reg    *ApprovalRegistry
+
+	// Log records non-fatal resume issues; nil = discard. The daemon wires a real one.
+	Log *slog.Logger
 
 	mu   sync.Mutex
 	runs map[core.RunID]context.CancelFunc
@@ -88,7 +93,35 @@ func (s *Supervisor) Approve(id core.RunID, stepID string, approved bool, reason
 	return s.reg.Resolve(id, stepID, Decision{Approved: approved, Reason: reason})
 }
 
-// ResumeAll loads incomplete runs from the store and resumes each (startup).
+var discardLogger = slog.New(slog.NewTextHandler(io.Discard, nil))
+
+func (s *Supervisor) logger() *slog.Logger {
+	if s.Log != nil {
+		return s.Log
+	}
+	return discardLogger
+}
+
+// resetIncompleteSteps marks every non-succeeded step of a resumed run as pending,
+// so observers don't see a stale actionable status (e.g. awaiting_gate) before the
+// engine re-runs the step. Succeeded steps are left intact — they seed downstream
+// inputs (spec §7). Startup reconciliation, so no event is emitted.
+func (s *Supervisor) resetIncompleteSteps(ctx context.Context, rs core.RunState) {
+	for _, st := range rs.Steps {
+		if st.Status == core.StepSucceeded {
+			continue
+		}
+		reset := core.StepState{RunID: rs.ID, StepID: st.StepID, Status: core.StepPending}
+		if err := s.store.SaveStepTransition(ctx, reset, nil); err != nil {
+			// Non-fatal: the engine re-runs the step regardless; only the visible
+			// status stays stale. Log and continue.
+			s.logger().Error("resume: reset step to pending", "run", rs.ID, "step", st.StepID, "err", err)
+		}
+	}
+}
+
+// ResumeAll loads incomplete runs from the store and resumes each (startup). A run
+// with an unparseable/invalid flow is skipped (logged), not fatal to the others.
 func (s *Supervisor) ResumeAll(ctx context.Context) error {
 	runs, err := s.store.LoadIncompleteRuns(ctx)
 	if err != nil {
@@ -97,11 +130,14 @@ func (s *Supervisor) ResumeAll(ctx context.Context) error {
 	for _, rs := range runs {
 		f, err := flow.ParseBytes([]byte(rs.FlowYAML))
 		if err != nil {
-			return fmt.Errorf("resume run %s: parse: %w", rs.ID, err)
+			s.logger().Error("resume: skip run with unparseable flow", "run", rs.ID, "err", err)
+			continue
 		}
 		if err := flow.Validate(f); err != nil {
-			return fmt.Errorf("resume run %s: validate: %w", rs.ID, err)
+			s.logger().Error("resume: skip run with invalid flow", "run", rs.ID, "err", err)
+			continue
 		}
+		s.resetIncompleteSteps(ctx, rs)
 		rs := rs
 		s.start(rs.ID, func(runCtx context.Context) error { return s.engine.Resume(runCtx, rs, f) })
 	}

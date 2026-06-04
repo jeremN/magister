@@ -62,6 +62,7 @@ func run(args []string, env func(string) string, stopCh <-chan struct{}, onListe
 		Store: st, Bus: bus, Clock: core.SystemClock{}, Log: log,
 	}
 	sup := supervisor.New(eng, st, reg)
+	sup.Log = log
 
 	if err := sup.ResumeAll(context.Background()); err != nil {
 		log.Error("resume incomplete runs", "err", err)

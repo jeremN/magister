@@ -23,6 +23,9 @@ func Validate(f *Flow) error {
 		if s.ID == "" {
 			return fmt.Errorf("a step has no id")
 		}
+		if !validStepID(s.ID) {
+			return fmt.Errorf("step id %q must match [A-Za-z0-9._-], not start with '-', and not be '.'/'..'", s.ID)
+		}
 		if _, dup := byID[s.ID]; dup {
 			return fmt.Errorf("duplicate step id %q", s.ID)
 		}
@@ -116,6 +119,23 @@ func validateJoin(s *Step) error {
 		return fmt.Errorf("step %q: join step must depend on at least one step", s.ID)
 	}
 	return nil
+}
+
+// validStepID reports whether id is safe as a filesystem path segment and a git
+// branch name: [A-Za-z0-9._-], not a leading '-', and not "." or "..".
+func validStepID(id string) bool {
+	if id == "." || id == ".." || id[0] == '-' {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		ok := c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' ||
+			c >= '0' && c <= '9' || c == '.' || c == '_' || c == '-'
+		if !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // findCycle runs a white/gray/black DFS over the needs graph and returns a step

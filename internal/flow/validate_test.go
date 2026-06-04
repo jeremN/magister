@@ -57,6 +57,28 @@ func TestValidateRejections(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsUnsafeStepID(t *testing.T) {
+	for _, bad := range []string{"a/b", "has space", "..", ".", "-leading", "weird*char"} {
+		f := &Flow{Name: "f", Steps: []*Step{
+			{ID: bad, Agent: "mock", Gate: Gate{Policy: GateManual}},
+		}}
+		if err := Validate(f); err == nil {
+			t.Errorf("step id %q should be rejected", bad)
+		}
+	}
+}
+
+func TestValidateAcceptsSlugStepIDs(t *testing.T) {
+	for _, ok := range []string{"a", "plan", "impl-api", "w0", "step_1", "v1.2"} {
+		f := &Flow{Name: "f", Steps: []*Step{
+			{ID: ok, Agent: "mock", Gate: Gate{Policy: GateManual}},
+		}}
+		if err := Validate(f); err != nil {
+			t.Errorf("step id %q should be accepted, got %v", ok, err)
+		}
+	}
+}
+
 func TestValidateDetectsCycle(t *testing.T) {
 	f := &Flow{Name: "f", Steps: []*Step{
 		{ID: "a", Needs: []string{"b"}, Agent: "m"},

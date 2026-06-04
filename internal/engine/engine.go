@@ -239,7 +239,7 @@ func (e *Engine) runStep(ctx context.Context, runID core.RunID, s *flow.Step, in
 		e.transition(ctx, runID, stepState(runID, s.ID, core.StepRunning, attempt, workDir, core.Result{}, nil),
 			event.Event{StepID: s.ID, Kind: event.StepStarted, Attempt: attempt})
 
-		res, _, execErr := e.attempt(ctx, runID, s, inputs, attempt, workDir)
+		res, gateFailed, execErr := e.attempt(ctx, runID, s, inputs, attempt, workDir)
 		if execErr == nil {
 			e.transition(ctx, runID, stepState(runID, s.ID, core.StepSucceeded, attempt, workDir, res, nil),
 				event.Event{StepID: s.ID, Kind: event.StepDone, Summary: res.Summary, CostUSD: res.CostUSD, Attempt: attempt})
@@ -249,6 +249,11 @@ func (e *Engine) runStep(ctx context.Context, runID core.RunID, s *flow.Step, in
 
 		if attempt < maxAttempts && s.Retry != nil {
 			continue // retry (covers both execution and gate failures)
+		}
+		// budget spent — terminal disposition. A failed AUTO gate with on_fail=escalate
+		// becomes a human approval; everything else fails the run.
+		if gateFailed && gateEscalates(s) {
+			return e.escalate(ctx, runID, s, res, workDir, lastErr, attempt)
 		}
 		e.transition(ctx, runID, stepState(runID, s.ID, core.StepFailed, attempt, workDir, core.Result{}, lastErr),
 			event.Event{StepID: s.ID, Kind: event.StepFailed, Attempt: attempt, Err: lastErr.Error()})
@@ -405,6 +410,36 @@ func gateBlocks(s *flow.Step) bool {
 	default:
 		return false
 	}
+}
+
+// gateEscalates reports whether a failed gate should be escalated to a human.
+// Escalation is auto-only: a manual gate's rejection is itself a human decision.
+func gateEscalates(s *flow.Step) bool {
+	return gatePolicyOf(s) == flow.GateAuto && s.Gate.OnFail == flow.FailEscalate
+}
+
+// escalate converts a failed auto gate into a human approval, reusing the manual
+// block-on-channel path. The failure reason rides on the gate.awaiting event's Err.
+func (e *Engine) escalate(ctx context.Context, runID core.RunID, s *flow.Step, res core.Result, workDir string, gateErr error, attemptNum int) (core.Result, error) {
+	res.StepID = s.ID
+	e.transition(ctx, runID, stepState(runID, s.ID, core.StepAwaitingGate, attemptNum, workDir, res, gateErr),
+		event.Event{StepID: s.ID, Kind: event.GateAwaiting, Attempt: attemptNum, Err: gateErr.Error()})
+
+	ok, err := e.Gate.Escalate(ctx, runID, s, res)
+	if err != nil {
+		e.transition(ctx, runID, stepState(runID, s.ID, core.StepFailed, attemptNum, workDir, core.Result{}, err),
+			event.Event{StepID: s.ID, Kind: event.StepFailed, Attempt: attemptNum, Err: err.Error()})
+		return core.Result{}, err
+	}
+	if !ok {
+		rej := fmt.Errorf("escalated gate rejected")
+		e.transition(ctx, runID, stepState(runID, s.ID, core.StepFailed, attemptNum, workDir, core.Result{}, rej),
+			event.Event{StepID: s.ID, Kind: event.StepFailed, Attempt: attemptNum, Err: rej.Error()})
+		return core.Result{}, rej
+	}
+	e.transition(ctx, runID, stepState(runID, s.ID, core.StepSucceeded, attemptNum, workDir, res, nil),
+		event.Event{StepID: s.ID, Kind: event.StepDone, Summary: res.Summary, CostUSD: res.CostUSD, Attempt: attemptNum})
+	return res, nil
 }
 
 var discardLogger = slog.New(slog.NewTextHandler(io.Discard, nil))

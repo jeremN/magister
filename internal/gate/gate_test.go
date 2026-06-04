@@ -43,3 +43,17 @@ type fixedApprover bool
 func (f fixedApprover) Approve(context.Context, core.RunID, *flow.Step, core.Result) (bool, error) {
 	return bool(f), nil
 }
+
+func TestEscalateUsesApprover(t *testing.T) {
+	s := &flow.Step{ID: "a", Gate: flow.Gate{
+		Policy: flow.GateAuto, Verifier: &flow.Verifier{Command: "false"}, OnFail: flow.FailEscalate}}
+
+	approved := &Evaluator{Approver: fixedApprover(true), Verifier: CommandVerifier{}}
+	if ok, err := approved.Escalate(context.Background(), "r1", s, core.Result{}); err != nil || !ok {
+		t.Fatalf("approve path: ok=%v err=%v, want true/nil", ok, err)
+	}
+	rejected := &Evaluator{Approver: fixedApprover(false), Verifier: CommandVerifier{}}
+	if ok, _ := rejected.Escalate(context.Background(), "r1", s, core.Result{}); ok {
+		t.Fatal("reject path: ok=true, want false")
+	}
+}

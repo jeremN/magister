@@ -15,6 +15,13 @@ type Evaluator struct {
 	Verifier Verifier
 }
 
+// Escalate turns a failed AUTO gate into a human approval, reusing the same Approver
+// path as a manual gate (the engine calls this when on_fail=escalate and the attempt
+// budget is spent). approve → the step's existing result stands; reject → the run aborts.
+func (e *Evaluator) Escalate(ctx context.Context, runID core.RunID, s *flow.Step, res core.Result) (bool, error) {
+	return e.Approver.Approve(ctx, runID, s, res)
+}
+
 func (e *Evaluator) Evaluate(ctx context.Context, runID core.RunID, s *flow.Step, res core.Result, workDir string) (bool, error) {
 	switch s.Gate.Policy {
 	case "", flow.GateManual, flow.GateConditional:

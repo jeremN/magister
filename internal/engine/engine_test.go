@@ -326,6 +326,102 @@ func (rejectApprover) Approve(context.Context, core.RunID, *flow.Step, core.Resu
 	return false, nil
 }
 
+func TestEscalateApproveSucceeds(t *testing.T) {
+	st := store.NewMem()
+	bus := event.NewBus()
+	ch, unsub := bus.Subscribe(32)
+	defer unsub()
+	e := &Engine{
+		Execs: map[string]core.Executor{"mock": executor.Mock{Name: "mock"}},
+		WS:    &workspace.Manager{Root: t.TempDir()},
+		Gate:  &gate.Evaluator{Approver: gate.AutoApprover{}, Verifier: gate.CommandVerifier{}},
+		Joins: join.Default(),
+		Store: st, Bus: bus, Clock: fakeClock{},
+	}
+	f := &flow.Flow{Name: "esc", Steps: []*flow.Step{
+		{ID: "a", Agent: "mock", Gate: flow.Gate{
+			Policy: flow.GateAuto, Verifier: &flow.Verifier{Command: "false"}, OnFail: flow.FailEscalate}},
+	}}
+	mustCreate(t, st, "r1", f)
+	if err := e.Run(context.Background(), "r1", f); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	got, _ := st.GetRun(context.Background(), "r1")
+	if got.Steps[0].Status != core.StepSucceeded {
+		t.Fatalf("step status = %q, want succeeded", got.Steps[0].Status)
+	}
+	if got.Steps[0].CostUSD != 0.01 {
+		t.Errorf("approved escalation should keep the original result, got CostUSD=%v want 0.01", got.Steps[0].CostUSD)
+	}
+	unsub()
+	var sawEscalation bool
+	for ev := range ch {
+		if ev.Kind == event.GateAwaiting && ev.Err != "" {
+			sawEscalation = true
+		}
+	}
+	if !sawEscalation {
+		t.Error("expected a gate.awaiting event with a failure reason")
+	}
+}
+
+func TestEscalateRejectAborts(t *testing.T) {
+	st := store.NewMem()
+	e := &Engine{
+		Execs: map[string]core.Executor{"mock": executor.Mock{Name: "mock"}},
+		WS:    &workspace.Manager{Root: t.TempDir()},
+		Gate:  &gate.Evaluator{Approver: rejectApprover{}, Verifier: gate.CommandVerifier{}},
+		Joins: join.Default(),
+		Store: st, Bus: event.NewBus(), Clock: fakeClock{},
+	}
+	f := &flow.Flow{Name: "esc", Steps: []*flow.Step{
+		{ID: "a", Agent: "mock", Gate: flow.Gate{
+			Policy: flow.GateAuto, Verifier: &flow.Verifier{Command: "false"}, OnFail: flow.FailEscalate}},
+	}}
+	mustCreate(t, st, "r1", f)
+	if err := e.Run(context.Background(), "r1", f); err == nil {
+		t.Fatal("expected run to fail on escalation reject")
+	}
+	got, _ := st.GetRun(context.Background(), "r1")
+	if got.Steps[0].Status != core.StepFailed {
+		t.Fatalf("step status = %q, want failed", got.Steps[0].Status)
+	}
+}
+
+func TestManualGateRejectDoesNotEscalate(t *testing.T) {
+	st := store.NewMem()
+	bus := event.NewBus()
+	ch, unsub := bus.Subscribe(32)
+	defer unsub()
+	e := &Engine{
+		Execs: map[string]core.Executor{"mock": executor.Mock{Name: "mock"}},
+		WS:    &workspace.Manager{Root: t.TempDir()},
+		Gate:  &gate.Evaluator{Approver: rejectApprover{}, Verifier: gate.CommandVerifier{}},
+		Joins: join.Default(),
+		Store: st, Bus: bus, Clock: fakeClock{},
+	}
+	f := &flow.Flow{Name: "mg", Steps: []*flow.Step{
+		{ID: "a", Agent: "mock", Gate: flow.Gate{Policy: flow.GateManual, OnFail: flow.FailEscalate}},
+	}}
+	mustCreate(t, st, "r1", f)
+	if err := e.Run(context.Background(), "r1", f); err == nil {
+		t.Fatal("expected run to fail (manual reject aborts)")
+	}
+	got, _ := st.GetRun(context.Background(), "r1")
+	if got.Steps[0].Status != core.StepFailed {
+		t.Fatalf("step status = %q, want failed", got.Steps[0].Status)
+	}
+	// Escalation is AUTO-only: a rejected manual gate must NOT escalate. The escalation
+	// path is the ONLY one that emits a gate.awaiting carrying a failure reason in Err,
+	// so its absence proves the manual reject aborted rather than escalating.
+	unsub()
+	for ev := range ch {
+		if ev.Kind == event.GateAwaiting && ev.Err != "" {
+			t.Errorf("manual reject must not escalate, but saw gate.awaiting with Err=%q", ev.Err)
+		}
+	}
+}
+
 func TestTimeoutBoundsVerifier(t *testing.T) {
 	st := store.NewMem()
 	e := &Engine{

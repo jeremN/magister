@@ -547,6 +547,44 @@ func TestRetryThenEscalate(t *testing.T) {
 	}
 }
 
+// teardownSpy records TeardownRun calls while delegating For to a real Manager.
+type teardownSpy struct {
+	*workspace.Manager
+	mu   sync.Mutex
+	runs []core.RunID
+}
+
+func (s *teardownSpy) TeardownRun(id core.RunID) error {
+	s.mu.Lock()
+	s.runs = append(s.runs, id)
+	s.mu.Unlock()
+	return s.Manager.TeardownRun(id)
+}
+
+func TestRunDAGTearsDownWorkspaceAtEnd(t *testing.T) {
+	st := store.NewMem()
+	spy := &teardownSpy{Manager: &workspace.Manager{Root: t.TempDir()}}
+	e := &Engine{
+		Execs: map[string]core.Executor{"mock": executor.Mock{Name: "mock"}},
+		WS:    spy,
+		Gate:  &gate.Evaluator{Approver: gate.AutoApprover{}, Verifier: gate.CommandVerifier{}},
+		Joins: join.Default(),
+		Store: st, Bus: event.NewBus(), Clock: core.SystemClock{},
+	}
+	f := &flow.Flow{Name: "f", Steps: []*flow.Step{
+		{ID: "a", Agent: "mock", Gate: flow.Gate{Policy: flow.GateAuto, Verifier: &flow.Verifier{Command: "true"}}},
+	}}
+	mustCreate(t, st, "r1", f)
+	if err := e.Run(context.Background(), "r1", f); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	spy.mu.Lock()
+	defer spy.mu.Unlock()
+	if len(spy.runs) != 1 || spy.runs[0] != "r1" {
+		t.Fatalf("expected TeardownRun(r1) once at run end, got %v", spy.runs)
+	}
+}
+
 func TestEngineEmitsAwaitingGateAndBlocks(t *testing.T) {
 	st := store.NewMem()
 	bus := event.NewBus()

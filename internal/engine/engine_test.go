@@ -502,6 +502,51 @@ func (b *blockingApprover) Approve(ctx context.Context, _ core.RunID, _ *flow.St
 	}
 }
 
+func TestRetryThenEscalate(t *testing.T) {
+	st := store.NewMem()
+	bus := event.NewBus()
+	ch, unsub := bus.Subscribe(64)
+	defer unsub()
+	e := &Engine{
+		Execs: map[string]core.Executor{"mock": executor.Mock{Name: "mock"}},
+		WS:    &workspace.Manager{Root: t.TempDir()},
+		Gate:  &gate.Evaluator{Approver: rejectApprover{}, Verifier: gate.CommandVerifier{}},
+		Joins: join.Default(),
+		Store: st, Bus: bus, Clock: fakeClock{},
+	}
+	// retry:{max:2} + failing auto verifier + on_fail:escalate: the unified budget
+	// retries (re-executing) once, THEN escalates the spent gate to a human — who
+	// rejects, failing the run. Proves retry-then-escalate ordering, not escalate-first.
+	f := &flow.Flow{Name: "re", Steps: []*flow.Step{
+		{ID: "a", Agent: "mock", Retry: &flow.RetryPolicy{Max: 2, Backoff: flow.Duration(time.Second)},
+			Gate: flow.Gate{Policy: flow.GateAuto, Verifier: &flow.Verifier{Command: "false"}, OnFail: flow.FailEscalate}},
+	}}
+	mustCreate(t, st, "r1", f)
+	if err := e.Run(context.Background(), "r1", f); err == nil {
+		t.Fatal("expected run to fail (escalation rejected)")
+	}
+	got, _ := st.GetRun(context.Background(), "r1")
+	if got.Steps[0].Status != core.StepFailed {
+		t.Fatalf("step status = %q, want failed", got.Steps[0].Status)
+	}
+	unsub()
+	var sawRetry, sawEscalation bool
+	for ev := range ch {
+		switch {
+		case ev.Kind == event.StepRetrying:
+			sawRetry = true
+		case ev.Kind == event.GateAwaiting && ev.Err != "":
+			sawEscalation = true
+		}
+	}
+	if !sawRetry {
+		t.Error("expected a step.retrying event (budget should be spent before escalating)")
+	}
+	if !sawEscalation {
+		t.Error("expected a gate.awaiting event with a reason (escalation after retries)")
+	}
+}
+
 func TestEngineEmitsAwaitingGateAndBlocks(t *testing.T) {
 	st := store.NewMem()
 	bus := event.NewBus()

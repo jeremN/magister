@@ -7,7 +7,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // writeBody writes b to w through an io.Writer parameter so that static-analysis
@@ -67,5 +69,40 @@ func TestUnknownCommandExitsNonZero(t *testing.T) {
 	var out bytes.Buffer
 	if code := dispatch([]string{"frobnicate"}, "http://x", &out); code == 0 {
 		t.Error("unknown command should exit non-zero")
+	}
+}
+
+func TestApproveRetriesOn409(t *testing.T) {
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if atomic.AddInt32(&calls, 1) < 3 {
+			w.WriteHeader(http.StatusConflict)
+			writeBody(w, `{"error":"no gate awaiting approval for this step"}`)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		writeBody(w, `{"status":"resolved"}`)
+	}))
+	defer srv.Close()
+
+	old := approveRetryEvery
+	approveRetryEvery = time.Millisecond
+	defer func() { approveRetryEvery = old }()
+
+	oldFor := approveRetryFor
+	approveRetryFor = 500 * time.Millisecond
+	defer func() { approveRetryFor = oldFor }()
+
+	var out bytes.Buffer
+	code := dispatch([]string{"approve", "01ABC", "stepA"}, srv.URL, &out)
+	if code != 0 {
+		t.Fatalf("exit = %d, out = %q", code, out.String())
+	}
+	if !strings.Contains(out.String(), "ok") {
+		t.Errorf("expected \"ok\" on success, got %q", out.String())
+	}
+	if n := atomic.LoadInt32(&calls); n < 3 {
+		t.Fatalf("expected ≥3 attempts (retried past 409), got %d", n)
 	}
 }

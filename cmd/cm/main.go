@@ -9,6 +9,14 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"time"
+)
+
+// approve retry window for the transient 409 a resumed run briefly returns before
+// its gate re-registers. Package vars so tests can shrink the interval.
+var (
+	approveRetryFor   = 10 * time.Second
+	approveRetryEvery = 100 * time.Millisecond
 )
 
 func main() {
@@ -127,17 +135,34 @@ func (c *client) approve(args []string, approve bool, out io.Writer) int {
 	}
 	body, _ := json.Marshal(map[string]any{"approve": approve, "reason": reason})
 	url := c.base + "/v1/runs/" + args[0] + "/steps/" + args[1] + "/approve"
-	resp, err := c.http.Post(url, "application/json", bytes.NewReader(body))
-	if err != nil {
-		fmt.Fprintln(out, "approve:", err)
-		return 1
+
+	deadline := time.Now().Add(approveRetryFor)
+	for {
+		resp, err := c.http.Post(url, "application/json", bytes.NewReader(body))
+		if err != nil {
+			fmt.Fprintln(out, "approve:", err)
+			return 1
+		}
+		if resp.StatusCode == http.StatusConflict && time.Now().Before(deadline) {
+			resp.Body.Close()
+			time.Sleep(approveRetryEvery)
+			continue
+		}
+		if resp.StatusCode == http.StatusConflict {
+			// retried until the deadline; the gate never registered.
+			resp.Body.Close()
+			fmt.Fprintf(out, "approve: gate not ready after %s\n", approveRetryFor)
+			return 1
+		}
+		if resp.StatusCode != http.StatusOK {
+			code := printErr(resp, out)
+			resp.Body.Close()
+			return code
+		}
+		resp.Body.Close()
+		fmt.Fprintln(out, "ok")
+		return 0
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return printErr(resp, out)
-	}
-	fmt.Fprintln(out, "ok")
-	return 0
 }
 
 func (c *client) get(path string, out io.Writer) int {

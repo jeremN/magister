@@ -39,9 +39,13 @@ type Executor interface {
 	Run(ctx context.Context, t Task) (Result, error)
 }
 
-// Workspace hands a step a working directory and a cleanup func.
+// Workspace hands a step a working directory and a cleanup func, and tears down a
+// run's isolated worktrees when the run ends.
 type Workspace interface {
 	For(runID RunID, s *flow.Step) (dir string, cleanup func() error, err error)
+	// TeardownRun removes the run's isolated worktrees (the base repo persists). It
+	// is best-effort, idempotent, and a no-op for a run with no worktrees.
+	TeardownRun(runID RunID) error
 }
 
 // Publisher receives engine events for live observers. Lossy by contract.

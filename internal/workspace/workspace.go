@@ -16,6 +16,10 @@ type Manager struct {
 	Root string
 }
 
+// TeardownRun is a no-op: the plain Manager allocates plain directories, which the
+// caller's run dir cleanup (or the OS temp dir) reclaims. GitManager does real teardown.
+func (m *Manager) TeardownRun(core.RunID) error { return nil }
+
 func (m *Manager) For(runID core.RunID, s *flow.Step) (string, func() error, error) {
 	dir := filepath.Join(m.Root, string(runID))
 	if s.Workspace == flow.WSIsolated {

@@ -71,13 +71,6 @@ func (e *Engine) Resume(parent context.Context, rs core.RunState, f *flow.Flow) 
 func (e *Engine) runDAG(parent context.Context, runID core.RunID, f *flow.Flow, seed map[string]core.Result) error {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
-	// Reclaim the run's isolated worktrees once every step has finished (wg.Wait
-	// below) and downstream steps have read upstream artifact paths. Best-effort.
-	defer func() {
-		if err := e.WS.TeardownRun(runID); err != nil {
-			e.logger().Error("teardown run workspaces", "run", runID, "err", err)
-		}
-	}()
 
 	if err := e.Store.SetRunStatus(ctx, runID, core.RunRunning, ""); err != nil {
 		e.logger().Error("set run status running", "run", runID, "err", err)
@@ -184,6 +177,13 @@ func (e *Engine) runDAG(parent context.Context, runID core.RunID, f *flow.Flow, 
 	}
 
 	wg.Wait()
+
+	// Reclaim the run's isolated worktrees now that all steps have finished and
+	// their artifact paths are no longer needed by dependents. Done before the
+	// final status write so observers who poll "succeeded" see a clean wt/. Best-effort.
+	if err := e.WS.TeardownRun(runID); err != nil {
+		e.logger().Error("teardown run workspaces", "run", runID, "err", err)
+	}
 
 	final := context.WithoutCancel(ctx)
 	switch {

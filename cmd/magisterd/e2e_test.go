@@ -6,6 +6,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -185,7 +187,7 @@ func crashDaemonAtGate(t *testing.T, db, flowYAML, stepID string) string {
 	reg := supervisor.NewApprovalRegistry()
 	eng := &engine.Engine{
 		Execs: map[string]core.Executor{"mock": executor.Mock{Name: "mock"}},
-		WS:    &workspace.Manager{Root: filepath.Join(filepath.Dir(db), "runs")},
+		WS:    &workspace.GitManager{Root: filepath.Join(filepath.Dir(db), "runs")},
 		Gate:  &gate.Evaluator{Approver: &supervisor.RegistryApprover{Reg: reg}, Verifier: gate.CommandVerifier{}},
 		Joins: join.Default(),
 		Store: st, Bus: event.NewBus(), Clock: core.SystemClock{},
@@ -276,4 +278,29 @@ func TestE2EKillAndResume(t *testing.T) {
 	// engine re-runs step a and re-registers the gate.
 	approveStep(t, base, id, "a")
 	waitStatus(t, base, id, "succeeded")
+}
+
+// TestE2EIsolatedWorktreesTornDown runs fan-out isolated steps through the daemon
+// (GitManager): each gets its own git worktree, and run-end teardown removes them
+// while the base repo persists.
+func TestE2EIsolatedWorktreesTornDown(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	tmp := t.TempDir()
+	base, stop := startDaemon(t, filepath.Join(tmp, "iso.db"))
+	defer stop()
+	id := postFlow(t, base, "name: f\nconcurrency: 2\nsteps:\n"+
+		"  - id: root\n    agent: mock\n    gate: { policy: auto, verifier: { command: \"true\" } }\n"+
+		"  - id: a\n    needs: [root]\n    agent: mock\n    workspace: isolated\n    gate: { policy: auto, verifier: { command: \"true\" } }\n"+
+		"  - id: b\n    needs: [root]\n    agent: mock\n    workspace: isolated\n    gate: { policy: auto, verifier: { command: \"true\" } }\n")
+	waitStatus(t, base, id, "succeeded")
+
+	runDir := filepath.Join(tmp, "runs", id)
+	if _, err := os.Stat(filepath.Join(runDir, "base", ".git")); err != nil {
+		t.Errorf("base repo should persist after the run: %v", err)
+	}
+	if entries, err := os.ReadDir(filepath.Join(runDir, "wt")); err == nil && len(entries) != 0 {
+		t.Errorf("isolated worktrees should be torn down at run end, found %d", len(entries))
+	}
 }

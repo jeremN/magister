@@ -56,7 +56,7 @@ func run(args []string, env func(string) string, stopCh <-chan struct{}, onListe
 	bus := event.NewBus()
 	eng := &engine.Engine{
 		Execs: map[string]core.Executor{"mock": executor.Mock{Name: "mock"}}, // real CLIAgents arrive in M4
-		WS:    &workspace.Manager{Root: filepath.Join(filepath.Dir(cfg.DBPath), "runs")},
+		WS:    &workspace.GitManager{Root: filepath.Join(filepath.Dir(cfg.DBPath), "runs")},
 		Gate:  &gate.Evaluator{Approver: &supervisor.RegistryApprover{Reg: reg}, Verifier: gate.CommandVerifier{}},
 		Joins: join.Default(),
 		Store: st, Bus: bus, Clock: core.SystemClock{}, Log: log,

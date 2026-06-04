@@ -225,6 +225,38 @@ func crashDaemonAtGate(t *testing.T, db, flowYAML, stepID string) string {
 	return ""
 }
 
+func TestE2EEscalateBlocksThenApprove(t *testing.T) {
+	base, stop := startDaemon(t, filepath.Join(t.TempDir(), "esc.db"))
+	defer stop()
+	// Auto gate whose verifier fails + on_fail: escalate, no retry → the gate
+	// failure is escalated to a human; approving it completes the run.
+	id := postFlow(t, base, "name: f\nsteps:\n  - id: a\n    agent: mock\n    gate: { policy: auto, verifier: { command: \"false\" }, on_fail: escalate }\n")
+
+	waitStatus(t, base, id, "running")
+	waitStepStatus(t, base, id, "a", "awaiting_gate")
+	approveStep(t, base, id, "a")
+	waitStatus(t, base, id, "succeeded")
+}
+
+// TestE2EEscalateKillAndResume covers spec §4.2/§7: an escalated gate re-escalates
+// after a crash+resume (no special resume code — re-execution reconstructs it), and
+// the resumed step shows pending (reset-to-pending) until it re-reaches the gate.
+func TestE2EEscalateKillAndResume(t *testing.T) {
+	db := filepath.Join(t.TempDir(), "esc-resume.db")
+	const yaml = "name: f\nsteps:\n  - id: a\n    agent: mock\n    gate: { policy: auto, verifier: { command: \"false\" }, on_fail: escalate }\n"
+
+	// Run until the escalated gate parks at awaiting_gate, then "crash".
+	id := crashDaemonAtGate(t, db, yaml, "a")
+
+	// Restart against the same DB → resume re-runs step a, the verifier fails again,
+	// and it re-escalates. approveStep retries past any transient 409.
+	base, stop := startDaemon(t, db)
+	defer stop()
+	waitStatus(t, base, id, "running")
+	approveStep(t, base, id, "a")
+	waitStatus(t, base, id, "succeeded")
+}
+
 func TestE2EKillAndResume(t *testing.T) {
 	db := filepath.Join(t.TempDir(), "resume.db")
 	// a two-step chain; step a has a manual gate, step b auto-passes after a.

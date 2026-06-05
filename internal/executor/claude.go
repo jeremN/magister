@@ -77,7 +77,13 @@ func (ClaudeSpec) Parse(stdout io.Reader, emit func(event.Event)) (string, float
 	if result.IsError || (result.Subtype != "" && result.Subtype != "success") {
 		msg := result.Subtype
 		if len(result.Errors) > 0 {
-			msg += ": " + strings.Join(result.Errors, "; ")
+			if msg != "" {
+				msg += ": "
+			}
+			msg += strings.Join(result.Errors, "; ")
+		}
+		if msg == "" {
+			msg = "is_error"
 		}
 		return "", 0, fmt.Errorf("claude agent failed (%s)", msg)
 	}

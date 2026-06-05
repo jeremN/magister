@@ -92,3 +92,17 @@ func TestClaudeSpecParseLargeToolResultLine(t *testing.T) {
 		t.Errorf("summary = %q, want ok", summary)
 	}
 }
+
+func TestClaudeSpecParseErrorMessageNeverEmpty(t *testing.T) {
+	out := []byte(`{"type":"result","is_error":true,"subtype":"","result":"","total_cost_usd":0}`)
+	_, _, err := (ClaudeSpec{}).Parse(bytes.NewReader(out), noEmit)
+	if err == nil {
+		t.Fatal("expected an error for an is_error result")
+	}
+	if strings.Contains(err.Error(), "()") {
+		t.Errorf("failure message has empty parens: %v", err)
+	}
+	if !strings.Contains(err.Error(), "is_error") {
+		t.Errorf("want a non-empty reason in the message, got: %v", err)
+	}
+}

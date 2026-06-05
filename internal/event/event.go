@@ -16,6 +16,7 @@ const (
 	StepFailed   Kind = "step.failed"
 	StepRetrying Kind = "step.retrying"
 	GateAwaiting Kind = "gate.awaiting"
+	AgentTool    Kind = "agent.tool" // a tool the agent picked up, mid-step (Summary = "<tool>: <input>")
 )
 
 // Event is one occurrence during a run. Seq is assigned by the store on persist

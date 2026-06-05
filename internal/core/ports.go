@@ -23,6 +23,10 @@ type Task struct {
 	Prompt  string
 	Inputs  []Artifact
 	WorkDir string
+	// Emit publishes a mid-step milestone event (e.g. agent.tool). The engine binds
+	// it to persist-then-publish; nil for callers that don't stream (e.g. Mock, or a
+	// non-engine test) — executors must nil-check or use a no-op wrapper.
+	Emit func(ev event.Event)
 }
 
 // Result is what an executor returns for one step.

@@ -57,4 +57,11 @@ func TestAgentsRegistry(t *testing.T) {
 	if sonnet, ok := m["sonnet"].(*executor.CLIAgent); !ok || sonnet.Model != "sonnet" {
 		t.Errorf("sonnet agent wrong: %#v", m["sonnet"])
 	}
+	gem, ok := m["gemini"].(*executor.CLIAgent)
+	if !ok {
+		t.Fatalf("gemini = %T, want *executor.CLIAgent", m["gemini"])
+	}
+	if gem.Bin != "gemini" || gem.Model != "gemini-2.5-pro" {
+		t.Errorf("gemini agent = {Bin:%q Model:%q}, want gemini/gemini-2.5-pro", gem.Bin, gem.Model)
+	}
 }

@@ -40,14 +40,16 @@ func main() {
 	}
 }
 
-// agents is the daemon's executor registry: the keyless mock plus claude-backed
-// opus/sonnet. A flow using opus/sonnet needs `claude` on PATH + ANTHROPIC_API_KEY;
-// mock flows need neither. (gemini/codex arrive in a later slice.)
+// agents is the daemon's executor registry: the keyless mock, claude-backed
+// opus/sonnet, and gemini-backed gemini. A flow using opus/sonnet needs `claude`
+// on PATH + ANTHROPIC_API_KEY, gemini needs `gemini` on PATH + its auth;
+// mock flows need neither. (codex arrives in a later slice.)
 func agents() map[string]core.Executor {
 	return map[string]core.Executor{
 		"mock":   executor.Mock{Name: "mock"},
 		"opus":   executor.Claude("opus"),
 		"sonnet": executor.Claude("sonnet"),
+		"gemini": executor.Gemini("gemini-2.5-pro"),
 	}
 }
 

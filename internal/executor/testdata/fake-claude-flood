@@ -1,0 +1,7 @@
+#!/bin/sh
+# Emit one malformed NDJSON line (forcing ClaudeSpec.Parse to bail immediately), then
+# flood >64KB to stdout that the parent never reads. Proves CLIAgent.Run drains stdout
+# before Wait: without the drain the child blocks writing to a full OS pipe buffer and
+# Run deadlocks. No API key, no network.
+printf '%s\n' 'this is not json'
+yes xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx | head -c 262144

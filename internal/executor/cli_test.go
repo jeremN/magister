@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"concentus/internal/core"
 	"concentus/internal/event"
@@ -95,5 +96,26 @@ func TestCLIAgentRunStreamsMilestones(t *testing.T) {
 	if len(res.Artifacts) != 1 || res.Artifacts[0].StepID != "s1" ||
 		filepath.Base(res.Artifacts[0].Path) != "out.txt" {
 		t.Errorf("artifacts = %+v, want one out.txt attributed to s1", res.Artifacts)
+	}
+}
+
+func TestCLIAgentRunDrainsStdoutOnParseError(t *testing.T) {
+	// The stub emits a malformed line (Parse bails immediately) then floods >64KB to
+	// stdout that nobody reads. Without the io.Copy drain before Wait, the child blocks
+	// writing to a full OS pipe buffer and Run deadlocks. Run it in a goroutine with a
+	// timeout so a regression fails cleanly instead of hanging the whole suite.
+	a := &CLIAgent{Bin: stubPath(t, "fake-claude-flood"), Model: "opus", Spec: ClaudeSpec{}}
+	done := make(chan error, 1)
+	go func() {
+		_, err := a.Run(context.Background(), core.Task{StepID: "s1", Prompt: "go", WorkDir: t.TempDir()})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected a non-nil error from the malformed stream")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run deadlocked — stdout was not drained before Wait")
 	}
 }

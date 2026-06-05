@@ -286,7 +286,7 @@ func (e *Engine) attempt(ctx context.Context, runID core.RunID, s *flow.Step, in
 	attemptCtx, cancel := withTimeout(ctx, s.Timeout)
 	defer cancel()
 
-	res, err = e.execute(attemptCtx, runID, s, inputs, workDir)
+	res, err = e.execute(attemptCtx, runID, s, inputs, attemptNum, workDir)
 	if err != nil {
 		return core.Result{}, false, err
 	}
@@ -311,8 +311,10 @@ func (e *Engine) attempt(ctx context.Context, runID core.RunID, s *flow.Step, in
 }
 
 // execute runs the step's work: a join strategy for fan-in steps, otherwise the
-// named executor. The caller (attempt) bounds this by the step timeout.
-func (e *Engine) execute(ctx context.Context, runID core.RunID, s *flow.Step, inputs []core.Artifact, workDir string) (core.Result, error) {
+// named executor. The caller (attempt) bounds this by the step timeout. For the
+// executor path it binds Task.Emit to persist-then-publish milestone events
+// (mirroring transition() without a step-state row).
+func (e *Engine) execute(ctx context.Context, runID core.RunID, s *flow.Step, inputs []core.Artifact, attemptNum int, workDir string) (core.Result, error) {
 	if s.Join != nil {
 		strat, ok := e.Joins[s.Join.Strategy]
 		if !ok {
@@ -324,6 +326,14 @@ func (e *Engine) execute(ctx context.Context, runID core.RunID, s *flow.Step, in
 	if !ok {
 		return core.Result{}, fmt.Errorf("unknown agent %q", s.Agent)
 	}
+	emit := func(ev event.Event) {
+		ev.RunID, ev.StepID, ev.Attempt, ev.At = string(runID), s.ID, attemptNum, e.Clock.Now()
+		if err := e.Store.AppendEvents(context.WithoutCancel(ctx), runID, []event.Event{ev}); err != nil {
+			e.logger().Error("append agent milestone", "run", runID, "step", s.ID, "err", err)
+			return
+		}
+		e.Bus.Publish(ev) // Seq is irrelevant on the bus — sse.go re-reads the store for real seqs
+	}
 	return ag.Run(ctx, core.Task{
 		RunID:   runID,
 		StepID:  s.ID,
@@ -331,6 +341,7 @@ func (e *Engine) execute(ctx context.Context, runID core.RunID, s *flow.Step, in
 		Prompt:  promptFor(s, inputs),
 		Inputs:  inputs,
 		WorkDir: workDir,
+		Emit:    emit,
 	})
 }
 

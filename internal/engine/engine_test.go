@@ -640,3 +640,60 @@ func TestEngineEmitsAwaitingGateAndBlocks(t *testing.T) {
 		t.Error("expected a gate.awaiting event")
 	}
 }
+
+// emittingExec is a test executor that emits one milestone via Task.Emit, to prove
+// the engine binds Emit and that the milestone is persisted + published.
+type emittingExec struct{}
+
+func (emittingExec) Run(ctx context.Context, tk core.Task) (core.Result, error) {
+	if tk.Emit != nil {
+		tk.Emit(event.Event{Kind: event.AgentTool, Summary: "Edit foo.go"})
+	}
+	return core.Result{StepID: tk.StepID, Summary: "ok", CostUSD: 0.01}, nil
+}
+
+func TestEngineForwardsAgentMilestones(t *testing.T) {
+	f := &flow.Flow{Name: "feat", Concurrency: 1, Steps: []*flow.Step{
+		{ID: "s1", Agent: "x", Gate: flow.Gate{Policy: flow.GateAuto, Verifier: &flow.Verifier{Command: "true"}}},
+	}}
+	if err := flow.Validate(f); err != nil {
+		t.Fatalf("flow invalid: %v", err)
+	}
+	eng, st, bus := newEngine(t, map[string]core.Executor{"x": emittingExec{}}, semaphore.NewWeighted(1))
+	mustCreate(t, st, "r1", f)
+	ch, unsub := bus.Subscribe(64)
+
+	if err := eng.Run(context.Background(), "r1", f); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	// Persisted: SSE reads the durable events table, so the milestone must be there.
+	evs, err := st.EventsSince(context.Background(), "r1", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var milestone *event.Event
+	for i := range evs {
+		if evs[i].Kind == event.AgentTool {
+			milestone = &evs[i]
+		}
+	}
+	if milestone == nil {
+		t.Fatalf("no agent.tool event persisted; got %+v", evs)
+	}
+	if milestone.Summary != "Edit foo.go" || milestone.StepID != "s1" {
+		t.Errorf("milestone = %+v, want Summary=\"Edit foo.go\" StepID=s1", *milestone)
+	}
+
+	// Published: the same milestone reached the live bus.
+	unsub()
+	var published bool
+	for ev := range ch {
+		if ev.Kind == event.AgentTool && ev.Summary == "Edit foo.go" {
+			published = true
+		}
+	}
+	if !published {
+		t.Error("agent.tool milestone was not published to the bus")
+	}
+}

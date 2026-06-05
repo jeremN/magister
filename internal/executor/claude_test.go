@@ -1,9 +1,15 @@
 package executor
 
 import (
+	"bytes"
 	"slices"
 	"testing"
+
+	"concentus/internal/event"
 )
+
+// noEmit is a no-op milestone sink for parser tests that don't assert emissions.
+func noEmit(event.Event) {}
 
 func TestClaudeSpecArgs(t *testing.T) {
 	got := ClaudeSpec{}.Args("opus", "do the thing")
@@ -15,7 +21,7 @@ func TestClaudeSpecArgs(t *testing.T) {
 
 func TestClaudeSpecParseSuccess(t *testing.T) {
 	out := []byte(`{"type":"result","subtype":"success","is_error":false,"result":"all done","total_cost_usd":0.0123,"usage":{"input_tokens":5}}`)
-	summary, cost, err := ClaudeSpec{}.Parse(out)
+	summary, cost, err := ClaudeSpec{}.Parse(bytes.NewReader(out), noEmit)
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -29,13 +35,13 @@ func TestClaudeSpecParseSuccess(t *testing.T) {
 
 func TestClaudeSpecParseErrorResult(t *testing.T) {
 	out := []byte(`{"type":"result","subtype":"error_max_turns","is_error":true,"result":"","total_cost_usd":0.5,"errors":["hit max turns"]}`)
-	if _, _, err := (ClaudeSpec{}).Parse(out); err == nil {
+	if _, _, err := (ClaudeSpec{}).Parse(bytes.NewReader(out), noEmit); err == nil {
 		t.Fatal("expected error for is_error/non-success result")
 	}
 }
 
 func TestClaudeSpecParseMalformed(t *testing.T) {
-	if _, _, err := (ClaudeSpec{}).Parse([]byte("not json at all")); err == nil {
+	if _, _, err := (ClaudeSpec{}).Parse(bytes.NewReader([]byte("not json at all")), noEmit); err == nil {
 		t.Fatal("expected a parse error for non-JSON output")
 	}
 }

@@ -3,7 +3,10 @@ package executor
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
+
+	"concentus/internal/event"
 )
 
 var _ CLISpec = ClaudeSpec{}
@@ -21,9 +24,20 @@ func (ClaudeSpec) Args(model, prompt string) []string {
 	}
 }
 
-// claudeResult mirrors the fields CLIAgent needs from claude's JSON result object.
-// Unknown fields are ignored (forward-compatible).
-type claudeResult struct {
+// streamLine is one NDJSON object from the `claude` CLI's output. Fields are the
+// union of what we read across line types; unknown fields/types are ignored
+// (forward-compatible). For type=="result", the flat result fields apply; the
+// Message.Content blocks (type=="assistant") carry tool_use milestones (used from
+// the next task on).
+type streamLine struct {
+	Type    string `json:"type"`
+	Message struct {
+		Content []struct {
+			Type  string          `json:"type"`
+			Name  string          `json:"name"`
+			Input json.RawMessage `json:"input"`
+		} `json:"content"`
+	} `json:"message"`
 	Subtype      string   `json:"subtype"`
 	IsError      bool     `json:"is_error"`
 	Result       string   `json:"result"`
@@ -31,19 +45,34 @@ type claudeResult struct {
 	Errors       []string `json:"errors"`
 }
 
-func (ClaudeSpec) Parse(stdout []byte) (string, float64, error) {
-	var r claudeResult
-	if err := json.Unmarshal(stdout, &r); err != nil {
-		return "", 0, fmt.Errorf("parse claude output: %w (got: %s)", err, truncate(stdout, 200))
+// Parse reads the claude CLI's stdout as a stream of NDJSON objects (json.Decoder
+// imposes no line-size cap, so a multi-MB tool_result line cannot overflow it),
+// returning the final result object's summary+cost. emit is reserved for milestone
+// events (wired in from the next task); a missing result line is an error.
+func (ClaudeSpec) Parse(stdout io.Reader, emit func(event.Event)) (string, float64, error) {
+	dec := json.NewDecoder(stdout)
+	var result *streamLine
+	for dec.More() {
+		var line streamLine
+		if err := dec.Decode(&line); err != nil {
+			return "", 0, fmt.Errorf("parse claude output: %w", err)
+		}
+		if line.Type == "result" {
+			r := line
+			result = &r
+		}
 	}
-	if r.IsError || (r.Subtype != "" && r.Subtype != "success") {
-		msg := r.Subtype
-		if len(r.Errors) > 0 {
-			msg += ": " + strings.Join(r.Errors, "; ")
+	if result == nil {
+		return "", 0, fmt.Errorf("claude output ended with no result")
+	}
+	if result.IsError || (result.Subtype != "" && result.Subtype != "success") {
+		msg := result.Subtype
+		if len(result.Errors) > 0 {
+			msg += ": " + strings.Join(result.Errors, "; ")
 		}
 		return "", 0, fmt.Errorf("claude agent failed (%s)", msg)
 	}
-	return r.Result, r.TotalCostUSD, nil
+	return result.Result, result.TotalCostUSD, nil
 }
 
 // truncate returns a trimmed, length-capped string for error diagnostics.

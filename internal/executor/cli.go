@@ -11,15 +11,18 @@ import (
 	"os/exec"
 
 	"concentus/internal/core"
+	"concentus/internal/event"
 )
 
 // CLISpec adapts one coding-agent CLI's invocation and output schema for CLIAgent.
-// ClaudeSpec implements it now; CodexSpec/GeminiSpec arrive in a later slice. A
-// non-nil Parse error means the agent ran but failed (e.g. is_error / non-success
-// subtype) — distinct from a process/exec failure, which CLIAgent surfaces itself.
+// ClaudeSpec implements it now; CodexSpec/GeminiSpec arrive in a later slice. Parse
+// consumes the CLI's stdout stream, emitting milestone events via emit as they
+// arrive, and returns the final summary+cost. A non-nil Parse error means the agent
+// ran but failed (e.g. is_error / non-success subtype / no result) — distinct from a
+// process/exec failure, which CLIAgent surfaces itself. emit is never nil.
 type CLISpec interface {
 	Args(model, prompt string) []string
-	Parse(stdout []byte) (summary string, costUSD float64, err error)
+	Parse(stdout io.Reader, emit func(event.Event)) (summary string, costUSD float64, err error)
 }
 
 var discardLogger = slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -54,20 +57,34 @@ func (a *CLIAgent) Run(ctx context.Context, t core.Task) (core.Result, error) {
 	} else {
 		cmd.Env = os.Environ()
 	}
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
+	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return core.Result{}, fmt.Errorf("%s: stdout pipe: %w", a.Bin, err)
+	}
 
-	if err := cmd.Run(); err != nil {
+	if err := cmd.Start(); err != nil {
 		if errors.Is(err, exec.ErrNotFound) {
 			return core.Result{}, fmt.Errorf("agent binary %q not found", a.Bin)
 		}
-		return core.Result{}, fmt.Errorf("%s: %w: %s", a.Bin, err, truncate(stderr.Bytes(), 500))
+		return core.Result{}, fmt.Errorf("%s: start: %w", a.Bin, err)
 	}
 
-	summary, cost, err := a.Spec.Parse(stdout.Bytes())
-	if err != nil {
-		return core.Result{}, err
+	emit := t.Emit
+	if emit == nil {
+		emit = func(event.Event) {}
+	}
+	summary, cost, perr := a.Spec.Parse(stdout, emit)
+	_, _ = io.Copy(io.Discard, stdout) // drain any unread tail so Wait can't block
+
+	if werr := cmd.Wait(); werr != nil {
+		// A non-zero exit (or kill via ctx) is a hard failure even if a result line
+		// was parsed mid-stream — it takes precedence, surfacing trimmed stderr.
+		return core.Result{}, fmt.Errorf("%s: %w: %s", a.Bin, werr, truncate(stderr.Bytes(), 500))
+	}
+	if perr != nil {
+		return core.Result{}, perr
 	}
 
 	discover := a.Discover

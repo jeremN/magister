@@ -65,7 +65,7 @@ func (a *CLIAgent) Run(ctx context.Context, t core.Task) (core.Result, error) {
 	}
 
 	if err := cmd.Start(); err != nil {
-		if errors.Is(err, exec.ErrNotFound) {
+		if errors.Is(err, exec.ErrNotFound) || errors.Is(err, os.ErrNotExist) {
 			return core.Result{}, fmt.Errorf("agent binary %q not found", a.Bin)
 		}
 		return core.Result{}, fmt.Errorf("%s: start: %w", a.Bin, err)

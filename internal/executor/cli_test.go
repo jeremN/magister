@@ -99,6 +99,16 @@ func TestCLIAgentRunStreamsMilestones(t *testing.T) {
 	}
 }
 
+func TestCLIAgentRunAbsentAbsolutePathNotFound(t *testing.T) {
+	// A bare name not on PATH already reports "not found" (exec.ErrNotFound); an
+	// absolute path that doesn't exist must report it the same friendly way.
+	a := &CLIAgent{Bin: "/nonexistent/definitely-not-a-real-binary-xyz", Model: "opus", Spec: ClaudeSpec{}}
+	_, err := a.Run(context.Background(), core.Task{StepID: "s1", Prompt: "go", WorkDir: t.TempDir()})
+	if err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("expected a friendly not-found error for an absolute bad path, got: %v", err)
+	}
+}
+
 func TestCLIAgentRunDrainsStdoutOnParseError(t *testing.T) {
 	// The stub emits a malformed line (Parse bails immediately) then floods >64KB to
 	// stdout that nobody reads. Without the io.Copy drain before Wait, the child blocks

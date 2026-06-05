@@ -3,6 +3,7 @@ package executor
 import (
 	"bytes"
 	"slices"
+	"strings"
 	"testing"
 
 	"concentus/internal/event"
@@ -13,7 +14,7 @@ func noEmit(event.Event) {}
 
 func TestClaudeSpecArgs(t *testing.T) {
 	got := ClaudeSpec{}.Args("opus", "do the thing")
-	want := []string{"-p", "do the thing", "--model", "opus", "--output-format", "json", "--permission-mode", "acceptEdits"}
+	want := []string{"-p", "do the thing", "--model", "opus", "--output-format", "stream-json", "--verbose", "--permission-mode", "acceptEdits"}
 	if !slices.Equal(got, want) {
 		t.Errorf("Args = %v, want %v", got, want)
 	}
@@ -43,5 +44,51 @@ func TestClaudeSpecParseErrorResult(t *testing.T) {
 func TestClaudeSpecParseMalformed(t *testing.T) {
 	if _, _, err := (ClaudeSpec{}).Parse(bytes.NewReader([]byte("not json at all")), noEmit); err == nil {
 		t.Fatal("expected a parse error for non-JSON output")
+	}
+}
+
+func TestClaudeSpecParseEmitsToolMilestones(t *testing.T) {
+	stream := `{"type":"system","subtype":"init"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"working"},{"type":"tool_use","name":"Edit","input":{"file_path":"src/foo.go"}}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"go test ./..."}}]}}
+{"type":"result","subtype":"success","is_error":false,"result":"done","total_cost_usd":0.04}`
+	var got []event.Event
+	emit := func(e event.Event) { got = append(got, e) }
+	summary, cost, err := ClaudeSpec{}.Parse(bytes.NewReader([]byte(stream)), emit)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if summary != "done" || cost != 0.04 {
+		t.Errorf("summary=%q cost=%v, want done/0.04", summary, cost)
+	}
+	if len(got) != 2 {
+		t.Fatalf("want 2 tool milestones, got %d: %+v", len(got), got)
+	}
+	if got[0].Kind != event.AgentTool || got[0].Summary != "Edit: src/foo.go" {
+		t.Errorf("milestone[0] = %+v, want agent.tool \"Edit: src/foo.go\"", got[0])
+	}
+	if got[1].Kind != event.AgentTool || got[1].Summary != "Bash: go test ./..." {
+		t.Errorf("milestone[1] = %+v, want agent.tool \"Bash: go test ./...\"", got[1])
+	}
+}
+
+func TestClaudeSpecParseNoResultLine(t *testing.T) {
+	stream := `{"type":"system","subtype":"init"}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"x"}}]}}`
+	if _, _, err := (ClaudeSpec{}).Parse(bytes.NewReader([]byte(stream)), noEmit); err == nil {
+		t.Fatal("expected error when the stream has no result line")
+	}
+}
+
+func TestClaudeSpecParseLargeToolResultLine(t *testing.T) {
+	big := strings.Repeat("x", 200_000) // > bufio.Scanner's 64KB default token cap
+	stream := `{"type":"user","message":{"content":[{"type":"tool_result","content":"` + big + `"}]}}
+{"type":"result","subtype":"success","is_error":false,"result":"ok","total_cost_usd":0.01}`
+	summary, _, err := ClaudeSpec{}.Parse(bytes.NewReader([]byte(stream)), noEmit)
+	if err != nil {
+		t.Fatalf("a >64KB NDJSON line must decode (json.Decoder has no line cap), got: %v", err)
+	}
+	if summary != "ok" {
+		t.Errorf("summary = %q, want ok", summary)
 	}
 }

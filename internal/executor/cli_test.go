@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"concentus/internal/core"
+	"concentus/internal/event"
 )
 
 func stubPath(t *testing.T, name string) string {
@@ -71,5 +72,28 @@ func TestCLIAgentDiscoveryFailureIsNonFatal(t *testing.T) {
 	}
 	if res.Summary != "stub done" || len(res.Artifacts) != 0 {
 		t.Errorf("want summary kept + no artifacts, got %+v", res)
+	}
+}
+
+func TestCLIAgentRunStreamsMilestones(t *testing.T) {
+	dir := initGitRepo(t) // from discover_test.go; skips if git absent
+	var got []event.Event
+	a := &CLIAgent{Bin: stubPath(t, "fake-claude-stream"), Model: "opus", Spec: ClaudeSpec{}}
+	res, err := a.Run(context.Background(), core.Task{
+		StepID: "s1", Prompt: "go", WorkDir: dir,
+		Emit: func(e event.Event) { got = append(got, e) },
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if res.Summary != "stream done" || res.CostUSD != 0.03 {
+		t.Errorf("summary=%q cost=%v, want \"stream done\"/0.03", res.Summary, res.CostUSD)
+	}
+	if len(got) != 1 || got[0].Kind != event.AgentTool || got[0].Summary != "Edit: out.txt" {
+		t.Fatalf("milestones = %+v, want one agent.tool \"Edit: out.txt\"", got)
+	}
+	if len(res.Artifacts) != 1 || res.Artifacts[0].StepID != "s1" ||
+		filepath.Base(res.Artifacts[0].Path) != "out.txt" {
+		t.Errorf("artifacts = %+v, want one out.txt attributed to s1", res.Artifacts)
 	}
 }

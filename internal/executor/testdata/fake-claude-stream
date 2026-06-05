@@ -1,0 +1,8 @@
+#!/bin/sh
+# Fake `claude` in stream-json mode: write a file (simulating an edit), print an
+# NDJSON stream with one tool_use milestone + a final result, exit 0. Used by the
+# CLIAgent streaming test — no API key, no network.
+echo "stub wrote this" > out.txt
+printf '%s\n' '{"type":"system","subtype":"init"}'
+printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Edit","input":{"file_path":"out.txt"}}]}}'
+printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"stream done","total_cost_usd":0.03}'

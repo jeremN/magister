@@ -109,6 +109,29 @@ func TestCLIAgentRunAbsentAbsolutePathNotFound(t *testing.T) {
 	}
 }
 
+func TestCLIAgentRunStreamsGeminiMilestones(t *testing.T) {
+	dir := initGitRepo(t) // from discover_test.go; skips if git absent
+	var got []event.Event
+	a := &CLIAgent{Bin: stubPath(t, "fake-gemini-stream"), Model: "gemini-2.5-pro", Spec: GeminiSpec{}}
+	res, err := a.Run(context.Background(), core.Task{
+		StepID: "s1", Prompt: "go", WorkDir: dir,
+		Emit: func(e event.Event) { got = append(got, e) },
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if res.Summary != "Wrote out.txt." || res.CostUSD != 0 {
+		t.Errorf("summary=%q cost=%v, want \"Wrote out.txt.\"/0", res.Summary, res.CostUSD)
+	}
+	if len(got) != 1 || got[0].Kind != event.AgentTool || got[0].Summary != "write_file: out.txt" {
+		t.Fatalf("milestones = %+v, want one agent.tool \"write_file: out.txt\"", got)
+	}
+	if len(res.Artifacts) != 1 || res.Artifacts[0].StepID != "s1" ||
+		filepath.Base(res.Artifacts[0].Path) != "out.txt" {
+		t.Errorf("artifacts = %+v, want one out.txt attributed to s1", res.Artifacts)
+	}
+}
+
 func TestCLIAgentRunDrainsStdoutOnParseError(t *testing.T) {
 	// The stub emits a malformed line (Parse bails immediately) then floods >64KB to
 	// stdout that nobody reads. Without the io.Copy drain before Wait, the child blocks

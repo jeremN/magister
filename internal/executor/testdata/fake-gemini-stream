@@ -1,0 +1,12 @@
+#!/bin/sh
+# Fake `gemini` in stream-json mode: write a file (simulating write_file), print the
+# Gemini NDJSON shape (init, update_topic + write_file tool_use, assistant deltas,
+# result success), exit 0. Used by the CLIAgent gemini streaming test — no API key,
+# no network.
+echo "stub gemini wrote this" > out.txt
+printf '%s\n' '{"type":"init","model":"gemini-2.5-pro"}'
+printf '%s\n' '{"type":"tool_use","tool_name":"update_topic","parameters":{"strategic_intent":"x"}}'
+printf '%s\n' '{"type":"tool_use","tool_name":"write_file","parameters":{"file_path":"out.txt","content":"hi"}}'
+printf '%s\n' '{"type":"message","role":"assistant","content":"Wrote ","delta":true}'
+printf '%s\n' '{"type":"message","role":"assistant","content":"out.txt.","delta":true}'
+printf '%s\n' '{"type":"result","status":"success","stats":{"total_tokens":5}}'

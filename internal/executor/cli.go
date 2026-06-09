@@ -15,7 +15,7 @@ import (
 )
 
 // CLISpec adapts one coding-agent CLI's invocation and output schema for CLIAgent.
-// ClaudeSpec implements it now; CodexSpec/GeminiSpec arrive in a later slice. Parse
+// ClaudeSpec, GeminiSpec, and CodexSpec implement it. Parse
 // consumes the CLI's stdout stream, emitting milestone events via emit as they
 // arrive, and returns the final summary+cost. A non-nil Parse error means the agent
 // ran but failed (e.g. is_error / non-success subtype / no result) — distinct from a

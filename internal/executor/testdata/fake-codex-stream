@@ -1,0 +1,13 @@
+#!/bin/sh
+# Fake `codex exec --json`: write a file (simulating a file_change), print the codex
+# JSONL envelope (thread.started, turn.started, an agent_message preamble, a file_change
+# started+completed pair, an agent_message final, turn.completed), exit 0. Used by the
+# CLIAgent codex streaming test — no API key, no network.
+echo "stub codex wrote this" > out.txt
+printf '%s\n' '{"type":"thread.started","thread_id":"t1"}'
+printf '%s\n' '{"type":"turn.started"}'
+printf '%s\n' '{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"Creating out.txt."}}'
+printf '%s\n' '{"type":"item.started","item":{"id":"item_1","type":"file_change","changes":[{"path":"out.txt","kind":"add"}],"status":"in_progress"}}'
+printf '%s\n' '{"type":"item.completed","item":{"id":"item_1","type":"file_change","changes":[{"path":"out.txt","kind":"add"}],"status":"completed"}}'
+printf '%s\n' '{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"done"}}'
+printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":5,"output_tokens":2}}'

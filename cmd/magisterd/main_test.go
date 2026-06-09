@@ -64,4 +64,11 @@ func TestAgentsRegistry(t *testing.T) {
 	if gem.Bin != "gemini" || gem.Model != "gemini-2.5-pro" {
 		t.Errorf("gemini agent = {Bin:%q Model:%q}, want gemini/gemini-2.5-pro", gem.Bin, gem.Model)
 	}
+	cdx, ok := m["codex"].(*executor.CLIAgent)
+	if !ok {
+		t.Fatalf("codex = %T, want *executor.CLIAgent", m["codex"])
+	}
+	if cdx.Bin != "codex" || cdx.Model != "" {
+		t.Errorf("codex agent = {Bin:%q Model:%q}, want codex/\"\"", cdx.Bin, cdx.Model)
+	}
 }

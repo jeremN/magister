@@ -87,3 +87,19 @@ func TestCodexSpecParseCompletedSupersedesEarlierFailure(t *testing.T) {
 		t.Errorf("summary = %q, want %q", summary, "recovered")
 	}
 }
+
+func TestCodexSpecParseTurnFailed(t *testing.T) {
+	stream := `{"type":"turn.started"}
+{"type":"error","message":"bad model"}
+{"type":"turn.failed","error":{"message":"bad model"}}`
+	if _, _, err := (CodexSpec{}).Parse(bytes.NewReader([]byte(stream)), noEmit); err == nil {
+		t.Fatal("expected an error when the stream reports turn.failed")
+	}
+}
+
+func TestCodexSpecParseNoTurnCompleted(t *testing.T) {
+	stream := `{"type":"item.completed","item":{"type":"agent_message","text":"hi"}}`
+	if _, _, err := (CodexSpec{}).Parse(bytes.NewReader([]byte(stream)), noEmit); err == nil {
+		t.Fatal("expected an error when the stream has no turn.completed")
+	}
+}

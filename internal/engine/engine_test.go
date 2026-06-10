@@ -697,3 +697,132 @@ func TestEngineForwardsAgentMilestones(t *testing.T) {
 		t.Error("agent.tool milestone was not published to the bus")
 	}
 }
+
+func TestConditionalGateTrueProceedsWithoutAwaiting(t *testing.T) {
+	st := store.NewMem()
+	bus := event.NewBus()
+	ch, unsub := bus.Subscribe(32)
+	defer unsub()
+	e := &Engine{
+		Execs: map[string]core.Executor{"mock": executor.Mock{Name: "mock"}},
+		WS:    &workspace.Manager{Root: t.TempDir()},
+		Gate:  &gate.Evaluator{Approver: gate.AutoApprover{}, Verifier: gate.CommandVerifier{}},
+		Joins: join.Default(),
+		Store: st, Bus: bus, Clock: fakeClock{},
+	}
+	cond := &flow.Condition{Expr: "result.cost_usd < 1.0"} // mock cost 0.01 -> true
+	if err := cond.Compile(); err != nil {
+		t.Fatal(err)
+	}
+	f := &flow.Flow{Name: "cond", Steps: []*flow.Step{
+		{ID: "a", Agent: "mock", Gate: flow.Gate{Policy: flow.GateConditional, Condition: cond}},
+	}}
+	mustCreate(t, st, "r1", f)
+	if err := e.Run(context.Background(), "r1", f); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	got, _ := st.GetRun(context.Background(), "r1")
+	if got.Steps[0].Status != core.StepSucceeded {
+		t.Fatalf("step status = %q, want succeeded", got.Steps[0].Status)
+	}
+	unsub()
+	for ev := range ch {
+		if ev.Kind == event.GateAwaiting {
+			t.Error("a conditional gate must not emit gate.awaiting (it resolves synchronously)")
+		}
+	}
+}
+
+func TestConditionalGateFalseAborts(t *testing.T) {
+	st := store.NewMem()
+	e := &Engine{
+		Execs: map[string]core.Executor{"mock": executor.Mock{Name: "mock"}},
+		WS:    &workspace.Manager{Root: t.TempDir()},
+		Gate:  &gate.Evaluator{Approver: gate.AutoApprover{}, Verifier: gate.CommandVerifier{}},
+		Joins: join.Default(),
+		Store: st, Bus: event.NewBus(), Clock: fakeClock{},
+	}
+	cond := &flow.Condition{Expr: "result.cost_usd > 1.0"} // mock cost 0.01 -> false
+	if err := cond.Compile(); err != nil {
+		t.Fatal(err)
+	}
+	f := &flow.Flow{Name: "cond", Steps: []*flow.Step{
+		{ID: "a", Agent: "mock", Gate: flow.Gate{Policy: flow.GateConditional, Condition: cond}},
+	}}
+	mustCreate(t, st, "r1", f)
+	if err := e.Run(context.Background(), "r1", f); err == nil {
+		t.Fatal("expected the run to fail on a false conditional gate")
+	}
+	got, _ := st.GetRun(context.Background(), "r1")
+	if got.Steps[0].Status != core.StepFailed {
+		t.Fatalf("step status = %q, want failed", got.Steps[0].Status)
+	}
+}
+
+func TestConditionalGateEscalatesOnFalse(t *testing.T) {
+	st := store.NewMem()
+	bus := event.NewBus()
+	ch, unsub := bus.Subscribe(32)
+	defer unsub()
+	e := &Engine{
+		Execs: map[string]core.Executor{"mock": executor.Mock{Name: "mock"}},
+		WS:    &workspace.Manager{Root: t.TempDir()},
+		Gate:  &gate.Evaluator{Approver: gate.AutoApprover{}, Verifier: gate.CommandVerifier{}}, // approves the escalation
+		Joins: join.Default(),
+		Store: st, Bus: bus, Clock: fakeClock{},
+	}
+	cond := &flow.Condition{Expr: "result.cost_usd > 1.0"} // false -> escalate
+	if err := cond.Compile(); err != nil {
+		t.Fatal(err)
+	}
+	f := &flow.Flow{Name: "cond", Steps: []*flow.Step{
+		{ID: "a", Agent: "mock", Gate: flow.Gate{
+			Policy: flow.GateConditional, Condition: cond, OnFail: flow.FailEscalate}},
+	}}
+	mustCreate(t, st, "r1", f)
+	if err := e.Run(context.Background(), "r1", f); err != nil {
+		t.Fatalf("escalation approved, run should succeed: %v", err)
+	}
+	got, _ := st.GetRun(context.Background(), "r1")
+	if got.Steps[0].Status != core.StepSucceeded {
+		t.Fatalf("step status = %q, want succeeded (escalation approved)", got.Steps[0].Status)
+	}
+	unsub()
+	var sawEscalation bool
+	for ev := range ch {
+		if ev.Kind == event.GateAwaiting && ev.Err != "" {
+			sawEscalation = true
+		}
+	}
+	if !sawEscalation {
+		t.Error("expected a gate.awaiting event with a failure reason (conditional escalation)")
+	}
+}
+
+// A conditional gate whose Eval errors at runtime (here: an uncompiled condition) is
+// a gate ERROR, not a gate FALSE: gateFailed=false, so it must short-circuit the run
+// WITHOUT escalating. With OnFail=escalate and an approving gate, a gate FALSE would
+// escalate and succeed — so a failed run + StepFailed proves error ≠ false (spec §6).
+func TestConditionalGateEvalErrorFailsWithoutEscalating(t *testing.T) {
+	st := store.NewMem()
+	e := &Engine{
+		Execs: map[string]core.Executor{"mock": executor.Mock{Name: "mock"}},
+		WS:    &workspace.Manager{Root: t.TempDir()},
+		Gate:  &gate.Evaluator{Approver: gate.AutoApprover{}, Verifier: gate.CommandVerifier{}}, // would approve an escalation
+		Joins: join.Default(),
+		Store: st, Bus: event.NewBus(), Clock: fakeClock{},
+	}
+	cond := &flow.Condition{Expr: "true"} // deliberately NOT compiled -> Eval returns an error
+	f := &flow.Flow{Name: "cond", Steps: []*flow.Step{
+		{ID: "a", Agent: "mock", Gate: flow.Gate{
+			Policy: flow.GateConditional, Condition: cond, OnFail: flow.FailEscalate}},
+	}}
+	mustCreate(t, st, "r1", f)
+	if err := e.Run(context.Background(), "r1", f); err == nil {
+		t.Fatal("expected the run to fail on a gate eval error (an error must not escalate)")
+	}
+	got, _ := st.GetRun(context.Background(), "r1")
+	if got.Steps[0].Status != core.StepFailed {
+		t.Fatalf("step status = %q, want failed (eval error, not an escalated approval)", got.Steps[0].Status)
+	}
+}

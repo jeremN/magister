@@ -45,7 +45,7 @@ const (
 //   - abort (default): fail the run once the budget is spent.
 //   - retry: an explicit synonym for the default — behaviourally identical to abort
 //     (the validator still requires a Retry policy with it); kept to document intent.
-//   - escalate: when an AUTO gate's budget is spent, convert the failed gate into a
+//   - escalate: when an auto or conditional gate fails, convert the failed gate into a
 //     human approval instead of failing — approve continues, reject aborts. No-op for
 //     manual gates, where a rejection is already a human decision.
 type FailPolicy string

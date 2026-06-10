@@ -257,7 +257,7 @@ func (e *Engine) runStep(ctx context.Context, runID core.RunID, s *flow.Step, in
 		if attempt < maxAttempts && s.Retry != nil {
 			continue // retry (covers both execution and gate failures)
 		}
-		// budget spent — terminal disposition. A failed AUTO gate with on_fail=escalate
+		// budget spent — terminal disposition. A failed auto/conditional gate with on_fail=escalate
 		// becomes a human approval; everything else fails the run.
 		if gateFailed && gateEscalates(s) {
 			return e.escalate(ctx, runID, s, res, workDir, lastErr, attempt)
@@ -279,9 +279,10 @@ func withTimeout(ctx context.Context, d flow.Duration) (context.Context, context
 }
 
 // attempt runs one execute + gate. The per-step timeout bounds the executor and an
-// AUTO gate's verifier (the automated work); a manual/conditional gate's approval
-// runs on the un-timed parent ctx. gateFailed distinguishes a gate verdict from an
-// executor/infra error so runStep can decide escalation.
+// AUTO gate's verifier (the automated work); a manual gate's human approval and a
+// conditional gate's inline expr evaluation run on the un-timed parent ctx.
+// gateFailed distinguishes a gate verdict from an executor/infra error so runStep
+// can decide escalation.
 func (e *Engine) attempt(ctx context.Context, runID core.RunID, s *flow.Step, inputs []core.Artifact, attemptNum int, workDir string) (res core.Result, gateFailed bool, err error) {
 	attemptCtx, cancel := withTimeout(ctx, s.Timeout)
 	defer cancel()
@@ -292,7 +293,7 @@ func (e *Engine) attempt(ctx context.Context, runID core.RunID, s *flow.Step, in
 	}
 	res.StepID = s.ID
 
-	gateCtx := ctx // manual/conditional approval is NOT timed out
+	gateCtx := ctx // manual approval blocks on a human; conditional eval is inline — neither is bounded by the step timeout
 	if gatePolicyOf(s) == flow.GateAuto {
 		gateCtx = attemptCtx // the verifier shares the step timeout
 	} else if gateBlocks(s) {
@@ -419,24 +420,21 @@ func gatePolicyOf(s *flow.Step) flow.GatePolicy {
 	return s.Gate.Policy
 }
 
-// gateBlocks reports whether a step's gate can block on human approval. Auto
-// gates resolve synchronously via the verifier and never block.
+// gateBlocks reports whether a step's gate can block on human approval. Auto and
+// conditional gates resolve synchronously (verifier / expr) and never block.
 func gateBlocks(s *flow.Step) bool {
-	switch gatePolicyOf(s) {
-	case flow.GateManual, flow.GateConditional:
-		return true
-	default:
-		return false
-	}
+	return gatePolicyOf(s) == flow.GateManual
 }
 
-// gateEscalates reports whether a failed gate should be escalated to a human.
-// Escalation is auto-only: a manual gate's rejection is itself a human decision.
+// gateEscalates reports whether a failed gate should escalate to a human. Auto and
+// conditional gates can escalate (both resolve automatically); a manual gate's
+// rejection is itself a human decision, so it never escalates.
 func gateEscalates(s *flow.Step) bool {
-	return gatePolicyOf(s) == flow.GateAuto && s.Gate.OnFail == flow.FailEscalate
+	p := gatePolicyOf(s)
+	return (p == flow.GateAuto || p == flow.GateConditional) && s.Gate.OnFail == flow.FailEscalate
 }
 
-// escalate converts a failed auto gate into a human approval, reusing the manual
+// escalate converts a failed auto/conditional gate into a human approval, reusing the manual
 // block-on-channel path. The failure reason rides on the gate.awaiting event's Err.
 func (e *Engine) escalate(ctx context.Context, runID core.RunID, s *flow.Step, res core.Result, workDir string, gateErr error, attemptNum int) (core.Result, error) {
 	res.StepID = s.ID

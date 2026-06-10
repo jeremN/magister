@@ -5,6 +5,13 @@
 // a dependency; fan-in = one step depending on several.
 package flow
 
+import (
+	"fmt"
+
+	"github.com/expr-lang/expr"
+	"github.com/expr-lang/expr/vm"
+)
+
 // WSMode controls how a step gets its working directory.
 type WSMode string
 
@@ -90,10 +97,52 @@ type Verifier struct {
 	Command string `yaml:"command"`
 }
 
-// Condition configures a conditional gate. The expr is compiled and evaluated
-// in M5; M0/M1 only validate its presence.
+// GateEnv is the environment a conditional gate's expression evaluates against:
+// the gated step's result, exposed under `result`.
+type GateEnv struct {
+	Result GateResult `expr:"result"`
+}
+
+// GateResult mirrors the salient fields of core.Result for expressions, e.g.
+// `result.cost_usd < 1.0 && result.summary contains "OK"`.
+type GateResult struct {
+	Summary   string   `expr:"summary"`
+	CostUSD   float64  `expr:"cost_usd"`
+	Artifacts []string `expr:"artifacts"` // artifact paths
+	StepID    string   `expr:"step_id"`
+}
+
+// Condition configures a conditional gate. Expr is compiled at Validate time so a
+// malformed or non-bool expression fails submission, not a running step; prog holds
+// the compiled program and is nil until Compile runs.
 type Condition struct {
 	Expr string `yaml:"expr"`
+	prog *vm.Program
+}
+
+// Compile compiles Expr against GateEnv, requiring a boolean result. Called from
+// Validate (submit time). A syntax error, an unknown identifier, or a non-bool
+// result is returned as an error.
+func (c *Condition) Compile() error {
+	p, err := expr.Compile(c.Expr, expr.Env(GateEnv{}), expr.AsBool())
+	if err != nil {
+		return err
+	}
+	c.prog = p
+	return nil
+}
+
+// Eval runs the compiled program against env and returns the gate decision.
+// A nil prog (Compile not run) or a runtime error is returned as an error.
+func (c *Condition) Eval(env GateEnv) (bool, error) {
+	if c.prog == nil {
+		return false, fmt.Errorf("condition not compiled")
+	}
+	out, err := expr.Run(c.prog, env)
+	if err != nil {
+		return false, err
+	}
+	return out.(bool), nil // AsBool guarantees a bool result
 }
 
 // Join marks a fan-in step and says how to combine upstream branches.

@@ -28,11 +28,49 @@ type Strategy interface {
 // Registry maps a strategy name to its implementation.
 type Registry map[flow.JoinStrategy]Strategy
 
-// Default registers only merge. select/synthesize (which need an arbiter agent)
-// arrive in M5; until then an unregistered strategy fails at runtime with a
-// clear "not implemented yet" message from the engine.
+// Default registers merge and select. synthesize (which also needs an arbiter
+// agent) arrives next; until then an unregistered strategy fails at runtime
+// with a clear "not implemented yet" message from the engine.
 func Default() Registry {
-	return Registry{flow.JoinMerge: Merge{}}
+	return Registry{
+		flow.JoinMerge:  Merge{},
+		flow.JoinSelect: Select{},
+	}
+}
+
+// stageCandidates copies each input artifact into <workDir>/.candidates/<stepID>/<base>
+// so the arbiter can read every candidate from within its own workspace, and returns
+// the staged relative paths grouped by source step (for the prompt). select uses these
+// read-only; synthesize excludes the .candidates dir from its result.
+func stageCandidates(inputs []core.Artifact, workDir string) (map[string][]string, error) {
+	staged := make(map[string][]string)
+	used := make(map[string]bool) // dest paths written this call, to avoid basename collisions
+	for _, in := range inputs {
+		destDir := filepath.Join(workDir, ".candidates", in.StepID)
+		if err := os.MkdirAll(destDir, 0o755); err != nil {
+			return nil, err
+		}
+		data, err := os.ReadFile(in.Path)
+		if err != nil {
+			return nil, fmt.Errorf("stage candidate %s: %w", in.Path, err)
+		}
+		base := filepath.Base(in.Path)
+		dest := filepath.Join(destDir, base)
+		for i := 1; used[dest]; i++ {
+			dest = filepath.Join(destDir, fmt.Sprintf("%d-%s", i, base))
+		}
+		used[dest] = true
+		// staging copies are read-only context for the arbiter; source file mode is not preserved.
+		if err := os.WriteFile(dest, data, 0o644); err != nil {
+			return nil, err
+		}
+		rel, err := filepath.Rel(workDir, dest)
+		if err != nil {
+			return nil, err
+		}
+		staged[in.StepID] = append(staged[in.StepID], rel)
+	}
+	return staged, nil
 }
 
 // Merge writes a manifest listing every upstream artifact. With real worktrees

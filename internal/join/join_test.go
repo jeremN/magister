@@ -34,12 +34,12 @@ func TestMergeWritesManifest(t *testing.T) {
 	}
 }
 
-func TestDefaultRegistryHasMergeOnly(t *testing.T) {
+func TestDefaultRegistryHasMergeAndSelect(t *testing.T) {
 	r := Default()
 	if _, ok := r[flow.JoinMerge]; !ok {
 		t.Error("merge should be registered")
 	}
-	if _, ok := r[flow.JoinSelect]; ok {
-		t.Error("select should NOT be registered in M1")
+	if _, ok := r[flow.JoinSelect]; !ok {
+		t.Error("select should be registered")
 	}
 }

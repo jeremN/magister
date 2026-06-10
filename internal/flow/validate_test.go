@@ -31,6 +31,9 @@ func TestValidateRejections(t *testing.T) {
 		"auto without verify": func(f *Flow) { f.Steps[1].Gate.Verifier = nil },
 		"bad gate policy":     func(f *Flow) { f.Steps[0].Gate.Policy = "weird" },
 		"cond without expr":   func(f *Flow) { f.Steps[0].Gate.Policy = GateConditional },
+		"cond bad expr": func(f *Flow) {
+			f.Steps[0].Gate = Gate{Policy: GateConditional, Condition: &Condition{Expr: "not valid +++"}}
+		},
 		"select without agent": func(f *Flow) {
 			f.Steps[1].Agent = ""
 			f.Steps[1].Join = &Join{Strategy: JoinSelect}
@@ -86,5 +89,17 @@ func TestValidateDetectsCycle(t *testing.T) {
 	}}
 	if err := Validate(f); err == nil {
 		t.Fatal("expected cycle error, got nil")
+	}
+}
+
+func TestValidateCompilesGoodCondition(t *testing.T) {
+	f := baseFlow()
+	f.Steps[0].Gate = Gate{Policy: GateConditional, Condition: &Condition{Expr: "result.cost_usd < 1.0"}}
+	if err := Validate(f); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	ok, err := f.Steps[0].Gate.Condition.Eval(GateEnv{Result: GateResult{CostUSD: 0.1}})
+	if err != nil || !ok {
+		t.Errorf("post-validate eval = %v,%v want true,nil (Validate should have compiled the expr)", ok, err)
 	}
 }

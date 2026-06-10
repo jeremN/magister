@@ -79,6 +79,9 @@ func validateGate(s *Step) error {
 		if s.Gate.Condition == nil || s.Gate.Condition.Expr == "" {
 			return fmt.Errorf("step %q: conditional gate requires a condition expr", s.ID)
 		}
+		if err := s.Gate.Condition.Compile(); err != nil {
+			return fmt.Errorf("step %q: invalid condition expr: %w", s.ID, err)
+		}
 	default:
 		return fmt.Errorf("step %q: unknown gate policy %q", s.ID, s.Gate.Policy)
 	}

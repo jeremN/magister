@@ -311,6 +311,33 @@ func (e *Engine) attempt(ctx context.Context, runID core.RunID, s *flow.Step, in
 	}
 }
 
+// runAgent runs the named agent with prompt in workDir, binding Task.Emit to the
+// persist-then-publish milestone path. Shared by normal steps and join arbiters
+// so an arbiter streams agent.tool milestones exactly like a normal step.
+func (e *Engine) runAgent(ctx context.Context, runID core.RunID, stepID, role, agentName, prompt, workDir string, attemptNum int, inputs []core.Artifact) (core.Result, error) {
+	ag, ok := e.Execs[agentName]
+	if !ok {
+		return core.Result{}, fmt.Errorf("unknown agent %q", agentName)
+	}
+	emit := func(ev event.Event) {
+		ev.RunID, ev.StepID, ev.Attempt, ev.At = string(runID), stepID, attemptNum, e.Clock.Now()
+		if err := e.Store.AppendEvents(context.WithoutCancel(ctx), runID, []event.Event{ev}); err != nil {
+			e.logger().Error("append agent milestone", "run", runID, "step", stepID, "err", err)
+			return
+		}
+		e.Bus.Publish(ev) // Seq is irrelevant on the bus — sse.go re-reads the store for real seqs
+	}
+	return ag.Run(ctx, core.Task{
+		RunID:   runID,
+		StepID:  stepID,
+		Role:    role,
+		Prompt:  prompt,
+		Inputs:  inputs,
+		WorkDir: workDir,
+		Emit:    emit,
+	})
+}
+
 // execute runs the step's work: a join strategy for fan-in steps, otherwise the
 // named executor. The caller (attempt) bounds this by the step timeout. For the
 // executor path it binds Task.Emit to persist-then-publish milestone events
@@ -323,27 +350,7 @@ func (e *Engine) execute(ctx context.Context, runID core.RunID, s *flow.Step, in
 		}
 		return strat.Join(ctx, s, inputs, workDir)
 	}
-	ag, ok := e.Execs[s.Agent]
-	if !ok {
-		return core.Result{}, fmt.Errorf("unknown agent %q", s.Agent)
-	}
-	emit := func(ev event.Event) {
-		ev.RunID, ev.StepID, ev.Attempt, ev.At = string(runID), s.ID, attemptNum, e.Clock.Now()
-		if err := e.Store.AppendEvents(context.WithoutCancel(ctx), runID, []event.Event{ev}); err != nil {
-			e.logger().Error("append agent milestone", "run", runID, "step", s.ID, "err", err)
-			return
-		}
-		e.Bus.Publish(ev) // Seq is irrelevant on the bus — sse.go re-reads the store for real seqs
-	}
-	return ag.Run(ctx, core.Task{
-		RunID:   runID,
-		StepID:  s.ID,
-		Role:    s.Role,
-		Prompt:  promptFor(s, inputs),
-		Inputs:  inputs,
-		WorkDir: workDir,
-		Emit:    emit,
-	})
+	return e.runAgent(ctx, runID, s.ID, s.Role, s.Agent, promptFor(s, inputs), workDir, attemptNum, inputs)
 }
 
 // maxBackoff caps exponential backoff before jitter, so a high retry count can't

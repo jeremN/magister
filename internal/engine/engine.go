@@ -348,7 +348,10 @@ func (e *Engine) execute(ctx context.Context, runID core.RunID, s *flow.Step, in
 		if !ok {
 			return core.Result{}, fmt.Errorf("join strategy %q not implemented yet", s.Join.Strategy)
 		}
-		return strat.Join(ctx, s, inputs, workDir)
+		run := func(ctx context.Context, agentName, prompt, wd string, in []core.Artifact) (core.Result, error) {
+			return e.runAgent(ctx, runID, s.ID, "arbiter", agentName, prompt, wd, attemptNum, in)
+		}
+		return strat.Join(ctx, s, inputs, workDir, run)
 	}
 	return e.runAgent(ctx, runID, s.ID, s.Role, s.Agent, promptFor(s, inputs), workDir, attemptNum, inputs)
 }

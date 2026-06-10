@@ -16,7 +16,7 @@ func TestMergeWritesManifest(t *testing.T) {
 		{StepID: "a", Path: "/tmp/a.md"},
 		{StepID: "b", Path: "/tmp/b.md"},
 	}
-	res, err := Merge{}.Join(context.Background(), &flow.Step{ID: "integrate"}, inputs, dir)
+	res, err := Merge{}.Join(context.Background(), &flow.Step{ID: "integrate"}, inputs, dir, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

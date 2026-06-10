@@ -24,10 +24,18 @@ func (e *Evaluator) Escalate(ctx context.Context, runID core.RunID, s *flow.Step
 
 func (e *Evaluator) Evaluate(ctx context.Context, runID core.RunID, s *flow.Step, res core.Result, workDir string) (bool, error) {
 	switch s.Gate.Policy {
-	case "", flow.GateManual, flow.GateConditional:
-		// M1: conditional falls back to manual approval (parity with the phase-1
-		// prototype). The expr-lang evaluator arrives in M5.
+	case "", flow.GateManual:
+		// manual (and the empty default) block on a human approval.
 		return e.Approver.Approve(ctx, runID, s, res)
+	case flow.GateConditional:
+		// conditional resolves synchronously from the compiled expr (like auto).
+		env := flow.GateEnv{Result: flow.GateResult{
+			Summary:   res.Summary,
+			CostUSD:   res.CostUSD,
+			Artifacts: artifactPaths(res.Artifacts),
+			StepID:    res.StepID,
+		}}
+		return s.Gate.Condition.Eval(env)
 	case flow.GateAuto:
 		ok, err := e.Verifier.Verify(ctx, s.Gate.Verifier.Command, workDir)
 		if err != nil {
@@ -37,4 +45,16 @@ func (e *Evaluator) Evaluate(ctx context.Context, runID core.RunID, s *flow.Step
 	default:
 		return false, fmt.Errorf("step %q: unknown gate policy %q", s.ID, s.Gate.Policy)
 	}
+}
+
+// artifactPaths extracts artifact file paths for a conditional gate's `result.artifacts`.
+func artifactPaths(arts []core.Artifact) []string {
+	if len(arts) == 0 {
+		return nil
+	}
+	paths := make([]string, len(arts))
+	for i, a := range arts {
+		paths[i] = a.Path
+	}
+	return paths
 }

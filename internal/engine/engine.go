@@ -254,11 +254,20 @@ func (e *Engine) runStep(ctx context.Context, runID core.RunID, s *flow.Step, in
 		}
 		lastErr = execErr
 
-		if attempt < maxAttempts && s.Retry != nil {
-			continue // retry (covers both execution and gate failures)
+		// A join step's failure disposition is governed by on_conflict (only `retry`
+		// re-runs via the generic budget); a normal/gate failure retries on s.Retry.
+		canRetry := attempt < maxAttempts && s.Retry != nil
+		if s.Join != nil {
+			canRetry = canRetry && s.Join.OnConflict == flow.FailRetry
 		}
-		// budget spent — terminal disposition. A failed auto/conditional gate with on_fail=escalate
-		// becomes a human approval; everything else fails the run.
+		if canRetry {
+			continue // retry (covers execution, gate, and on_conflict=retry join failures)
+		}
+		// budget spent — terminal disposition.
+		if s.Join != nil && s.Join.OnConflict == flow.FailEscalate {
+			return e.escalateJoin(ctx, runID, s, inputs, workDir, lastErr, attempt)
+		}
+		// A failed auto/conditional gate with on_fail=escalate becomes a human approval.
 		if gateFailed && gateEscalates(s) {
 			return e.escalate(ctx, runID, s, res, workDir, lastErr, attempt)
 		}
@@ -465,6 +474,39 @@ func (e *Engine) escalate(ctx context.Context, runID core.RunID, s *flow.Step, r
 	}
 	e.transition(ctx, runID, stepState(runID, s.ID, core.StepSucceeded, attemptNum, workDir, res, nil),
 		event.Event{StepID: s.ID, Kind: event.StepDone, Summary: res.Summary, CostUSD: res.CostUSD, Attempt: attemptNum})
+	return res, nil
+}
+
+// escalateJoin handles a failed join with on_conflict=escalate. Unlike a gate
+// escalate (which approves an existing result), a failed join has no result, so
+// approval RE-RUNS the join exactly once: approve -> one fresh attempt; reject ->
+// abort. The failure reason rides on the gate.awaiting event's Err.
+func (e *Engine) escalateJoin(ctx context.Context, runID core.RunID, s *flow.Step, inputs []core.Artifact, workDir string, joinErr error, attemptNum int) (core.Result, error) {
+	e.transition(ctx, runID, stepState(runID, s.ID, core.StepAwaitingGate, attemptNum, workDir, core.Result{}, joinErr),
+		event.Event{StepID: s.ID, Kind: event.GateAwaiting, Attempt: attemptNum, Err: joinErr.Error()})
+
+	ok, err := e.Gate.Escalate(ctx, runID, s, core.Result{})
+	if err != nil {
+		e.transition(ctx, runID, stepState(runID, s.ID, core.StepFailed, attemptNum, workDir, core.Result{}, err),
+			event.Event{StepID: s.ID, Kind: event.StepFailed, Attempt: attemptNum, Err: err.Error()})
+		return core.Result{}, err
+	}
+	if !ok {
+		rej := fmt.Errorf("escalated join rejected")
+		e.transition(ctx, runID, stepState(runID, s.ID, core.StepFailed, attemptNum, workDir, core.Result{}, rej),
+			event.Event{StepID: s.ID, Kind: event.StepFailed, Attempt: attemptNum, Err: rej.Error()})
+		return core.Result{}, rej
+	}
+	// approved: re-run the join exactly once. gateFailed is intentionally dropped —
+	// a gate failure on the re-run is terminal (no nested escalation).
+	res, _, execErr := e.attempt(ctx, runID, s, inputs, attemptNum+1, workDir)
+	if execErr != nil {
+		e.transition(ctx, runID, stepState(runID, s.ID, core.StepFailed, attemptNum+1, workDir, core.Result{}, execErr),
+			event.Event{StepID: s.ID, Kind: event.StepFailed, Attempt: attemptNum + 1, Err: execErr.Error()})
+		return core.Result{}, execErr
+	}
+	e.transition(ctx, runID, stepState(runID, s.ID, core.StepSucceeded, attemptNum+1, workDir, res, nil),
+		event.Event{StepID: s.ID, Kind: event.StepDone, Summary: res.Summary, CostUSD: res.CostUSD, Attempt: attemptNum + 1})
 	return res, nil
 }
 

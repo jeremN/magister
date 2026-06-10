@@ -909,3 +909,172 @@ func TestSynthesizeJoinReturnsMergedOutput(t *testing.T) {
 		t.Errorf("join cost = %v, want the arbiter's 0.03 (not the upstream mock's 0.01)", j.CostUSD)
 	}
 }
+
+// flakyPick fails the select once (no token), then selects `pick` on re-run.
+type flakyPick struct {
+	pick  string
+	calls *int
+}
+
+func (f flakyPick) Run(_ context.Context, t core.Task) (core.Result, error) {
+	*f.calls++
+	if *f.calls == 1 {
+		return core.Result{StepID: t.StepID, Summary: "undecided"}, nil // no SELECTED -> select errors
+	}
+	return core.Result{StepID: t.StepID, Summary: "SELECTED: " + f.pick, CostUSD: 0.02}, nil
+}
+
+// noPick never emits a SELECTED token, so the select join always fails.
+type noPick struct{}
+
+func (noPick) Run(_ context.Context, t core.Task) (core.Result, error) {
+	return core.Result{StepID: t.StepID, Summary: "undecided"}, nil
+}
+
+func TestJoinConflictAbortFailsRun(t *testing.T) {
+	st := store.NewMem()
+	e := &Engine{
+		Execs: map[string]core.Executor{"mock": executor.Mock{Name: "mock"}, "arbiter": noPick{}},
+		WS:    &workspace.Manager{Root: t.TempDir()},
+		Gate:  &gate.Evaluator{Approver: gate.AutoApprover{}, Verifier: gate.CommandVerifier{}},
+		Joins: join.Default(),
+		Store: st, Bus: event.NewBus(), Clock: fakeClock{},
+	}
+	f := fanInFlow(&flow.Join{Strategy: flow.JoinSelect, Agent: "arbiter", OnConflict: flow.FailAbort})
+	mustCreate(t, st, "r1", f)
+	if err := e.Run(context.Background(), "r1", f); err == nil {
+		t.Fatal("expected the run to fail on a join conflict with on_conflict=abort")
+	}
+	got, _ := st.GetRun(context.Background(), "r1")
+	if got.Steps[2].Status != core.StepFailed {
+		t.Fatalf("join status = %q, want failed", got.Steps[2].Status)
+	}
+}
+
+func TestJoinConflictEscalateApproveReRuns(t *testing.T) {
+	st := store.NewMem()
+	bus := event.NewBus()
+	ch, unsub := bus.Subscribe(64)
+	defer unsub()
+	calls := 0
+	e := &Engine{
+		Execs: map[string]core.Executor{"mock": executor.Mock{Name: "mock"}, "arbiter": flakyPick{pick: "a", calls: &calls}},
+		WS:    &workspace.Manager{Root: t.TempDir()},
+		Gate:  &gate.Evaluator{Approver: gate.AutoApprover{}, Verifier: gate.CommandVerifier{}}, // approves the escalation
+		Joins: join.Default(),
+		Store: st, Bus: bus, Clock: fakeClock{},
+	}
+	f := fanInFlow(&flow.Join{Strategy: flow.JoinSelect, Agent: "arbiter", OnConflict: flow.FailEscalate})
+	mustCreate(t, st, "r1", f)
+	if err := e.Run(context.Background(), "r1", f); err != nil {
+		t.Fatalf("escalation approved, run should succeed: %v", err)
+	}
+	got, _ := st.GetRun(context.Background(), "r1")
+	if got.Steps[2].Status != core.StepSucceeded {
+		t.Fatalf("join status = %q, want succeeded (approve re-ran the join)", got.Steps[2].Status)
+	}
+	unsub()
+	var sawAwaiting bool
+	for ev := range ch {
+		if ev.Kind == event.GateAwaiting && ev.Err != "" {
+			sawAwaiting = true
+		}
+	}
+	if !sawAwaiting {
+		t.Error("expected a gate.awaiting event with the join failure reason")
+	}
+}
+
+// joinStep returns the fan-in step (ID "j") from a fetched run.
+func joinStep(t *testing.T, got core.RunState) core.StepState {
+	t.Helper()
+	for _, s := range got.Steps {
+		if s.StepID == "j" {
+			return s
+		}
+	}
+	t.Fatalf("join step %q not found in %+v", "j", got.Steps)
+	return core.StepState{}
+}
+
+func TestJoinConflictRetrySucceedsOnSecondAttempt(t *testing.T) {
+	st := store.NewMem()
+	calls := 0
+	e := &Engine{
+		Execs: map[string]core.Executor{"mock": executor.Mock{Name: "mock"}, "arbiter": flakyPick{pick: "a", calls: &calls}},
+		WS:    &workspace.Manager{Root: t.TempDir()},
+		Gate:  &gate.Evaluator{Approver: gate.AutoApprover{}, Verifier: gate.CommandVerifier{}},
+		Joins: join.Default(),
+		Store: st, Bus: event.NewBus(), Clock: fakeClock{},
+	}
+	f := fanInFlow(&flow.Join{Strategy: flow.JoinSelect, Agent: "arbiter", OnConflict: flow.FailRetry})
+	f.Steps[2].Retry = &flow.RetryPolicy{Max: 2, Backoff: flow.Duration(time.Second)}
+	mustCreate(t, st, "r1", f)
+	if err := e.Run(context.Background(), "r1", f); err != nil {
+		t.Fatalf("on_conflict=retry should re-run and succeed on attempt 2: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("arbiter called %d times, want 2 (fail then succeed)", calls)
+	}
+	got, _ := st.GetRun(context.Background(), "r1")
+	if j := joinStep(t, got); j.Status != core.StepSucceeded {
+		t.Fatalf("join status = %q, want succeeded after retry", j.Status)
+	}
+}
+
+func TestJoinConflictRetryExhaustsBudgetThenFails(t *testing.T) {
+	st := store.NewMem()
+	e := &Engine{
+		Execs: map[string]core.Executor{"mock": executor.Mock{Name: "mock"}, "arbiter": noPick{}},
+		WS:    &workspace.Manager{Root: t.TempDir()},
+		Gate:  &gate.Evaluator{Approver: gate.AutoApprover{}, Verifier: gate.CommandVerifier{}},
+		Joins: join.Default(),
+		Store: st, Bus: event.NewBus(), Clock: fakeClock{},
+	}
+	f := fanInFlow(&flow.Join{Strategy: flow.JoinSelect, Agent: "arbiter", OnConflict: flow.FailRetry})
+	f.Steps[2].Retry = &flow.RetryPolicy{Max: 2, Backoff: flow.Duration(time.Second)}
+	mustCreate(t, st, "r1", f)
+	if err := e.Run(context.Background(), "r1", f); err == nil {
+		t.Fatal("expected the run to fail after the retry budget is exhausted")
+	}
+	got, _ := st.GetRun(context.Background(), "r1")
+	if j := joinStep(t, got); j.Status != core.StepFailed {
+		t.Fatalf("join status = %q, want failed after budget exhausted", j.Status)
+	}
+}
+
+func TestJoinConflictEscalateRejectAborts(t *testing.T) {
+	st := store.NewMem()
+	e := &Engine{
+		Execs: map[string]core.Executor{"mock": executor.Mock{Name: "mock"}, "arbiter": noPick{}},
+		WS:    &workspace.Manager{Root: t.TempDir()},
+		Gate:  &gate.Evaluator{Approver: rejectApprover{}, Verifier: gate.CommandVerifier{}}, // rejects the escalation
+		Joins: join.Default(),
+		Store: st, Bus: event.NewBus(), Clock: fakeClock{},
+	}
+	// rejectApprover rejects EVERY manual gate, so the upstream steps use a passing
+	// auto gate; only the escalated join then routes through the rejecting Approver.
+	f := &flow.Flow{Name: "fanin", Steps: []*flow.Step{
+		{ID: "a", Agent: "mock", Gate: flow.Gate{Policy: flow.GateAuto, Verifier: &flow.Verifier{Command: "true"}}},
+		{ID: "b", Agent: "mock", Gate: flow.Gate{Policy: flow.GateAuto, Verifier: &flow.Verifier{Command: "true"}}},
+		{ID: "j", Needs: []string{"a", "b"},
+			Join: &flow.Join{Strategy: flow.JoinSelect, Agent: "arbiter", OnConflict: flow.FailEscalate}},
+	}}
+	mustCreate(t, st, "r1", f)
+	if err := e.Run(context.Background(), "r1", f); err == nil {
+		t.Fatal("expected the run to fail when the escalated join is rejected")
+	}
+	got, _ := st.GetRun(context.Background(), "r1")
+	var j *core.StepState
+	for i := range got.Steps {
+		if got.Steps[i].StepID == "j" {
+			j = &got.Steps[i]
+		}
+	}
+	if j == nil {
+		t.Fatalf("join step %q not recorded; steps=%+v", "j", got.Steps)
+	}
+	if j.Status != core.StepFailed {
+		t.Fatalf("join status = %q, want failed (escalation rejected)", j.Status)
+	}
+}

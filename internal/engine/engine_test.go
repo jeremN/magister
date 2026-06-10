@@ -3,6 +3,8 @@ package engine
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -824,5 +826,86 @@ func TestConditionalGateEvalErrorFailsWithoutEscalating(t *testing.T) {
 	got, _ := st.GetRun(context.Background(), "r1")
 	if got.Steps[0].Status != core.StepFailed {
 		t.Fatalf("step status = %q, want failed (eval error, not an escalated approval)", got.Steps[0].Status)
+	}
+}
+
+// pickExec is a test arbiter that always selects `pick` (emits the SELECTED token).
+type pickExec struct{ pick string }
+
+func (p pickExec) Run(_ context.Context, t core.Task) (core.Result, error) {
+	return core.Result{StepID: t.StepID, Summary: "choosing\nSELECTED: " + p.pick, CostUSD: 0.02}, nil
+}
+
+// synthExec is a test arbiter that writes one merged file and returns it.
+type synthExec struct{}
+
+func (synthExec) Run(_ context.Context, t core.Task) (core.Result, error) {
+	out := filepath.Join(t.WorkDir, "synthesis.md")
+	if err := os.WriteFile(out, []byte("merged"), 0o644); err != nil {
+		return core.Result{}, err
+	}
+	return core.Result{StepID: t.StepID, Summary: "synthesized", Artifacts: []core.Artifact{{StepID: t.StepID, Path: out}}, CostUSD: 0.03}, nil
+}
+
+// fanInFlow builds a two-upstream-mock fan-in into a join step `j`.
+func fanInFlow(j *flow.Join) *flow.Flow {
+	return &flow.Flow{Name: "fanin", Steps: []*flow.Step{
+		{ID: "a", Agent: "mock"},
+		{ID: "b", Agent: "mock"},
+		{ID: "j", Needs: []string{"a", "b"}, Join: j},
+	}}
+}
+
+func TestSelectJoinForwardsWinner(t *testing.T) {
+	st := store.NewMem()
+	e := &Engine{
+		Execs: map[string]core.Executor{"mock": executor.Mock{Name: "mock"}, "arbiter": pickExec{pick: "a"}},
+		WS:    &workspace.Manager{Root: t.TempDir()},
+		Gate:  &gate.Evaluator{Approver: gate.AutoApprover{}, Verifier: gate.CommandVerifier{}},
+		Joins: join.Default(),
+		Store: st, Bus: event.NewBus(), Clock: fakeClock{},
+	}
+	f := fanInFlow(&flow.Join{Strategy: flow.JoinSelect, Agent: "arbiter"})
+	mustCreate(t, st, "r1", f)
+	if err := e.Run(context.Background(), "r1", f); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	got, _ := st.GetRun(context.Background(), "r1")
+	j := got.Steps[2]
+	if j.Status != core.StepSucceeded {
+		t.Fatalf("join status = %q, want succeeded", j.Status)
+	}
+	if len(j.Artifacts) != 1 || filepath.Base(j.Artifacts[0].Path) != "a.out.md" {
+		t.Fatalf("join artifacts = %v, want a's a.out.md (the selected winner)", j.Artifacts)
+	}
+	if j.CostUSD != 0.02 {
+		t.Errorf("join cost = %v, want the arbiter's 0.02 (not the upstream mock's 0.01)", j.CostUSD)
+	}
+}
+
+func TestSynthesizeJoinReturnsMergedOutput(t *testing.T) {
+	st := store.NewMem()
+	e := &Engine{
+		Execs: map[string]core.Executor{"mock": executor.Mock{Name: "mock"}, "arbiter": synthExec{}},
+		WS:    &workspace.Manager{Root: t.TempDir()},
+		Gate:  &gate.Evaluator{Approver: gate.AutoApprover{}, Verifier: gate.CommandVerifier{}},
+		Joins: join.Default(),
+		Store: st, Bus: event.NewBus(), Clock: fakeClock{},
+	}
+	f := fanInFlow(&flow.Join{Strategy: flow.JoinSynthesize, Agent: "arbiter"})
+	mustCreate(t, st, "r1", f)
+	if err := e.Run(context.Background(), "r1", f); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	got, _ := st.GetRun(context.Background(), "r1")
+	j := got.Steps[2]
+	if j.Status != core.StepSucceeded {
+		t.Fatalf("join status = %q, want succeeded", j.Status)
+	}
+	if len(j.Artifacts) != 1 || filepath.Base(j.Artifacts[0].Path) != "synthesis.md" {
+		t.Fatalf("join artifacts = %v, want the synthesized synthesis.md", j.Artifacts)
+	}
+	if j.CostUSD != 0.03 {
+		t.Errorf("join cost = %v, want the arbiter's 0.03 (not the upstream mock's 0.01)", j.CostUSD)
 	}
 }

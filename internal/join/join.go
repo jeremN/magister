@@ -28,13 +28,12 @@ type Strategy interface {
 // Registry maps a strategy name to its implementation.
 type Registry map[flow.JoinStrategy]Strategy
 
-// Default registers merge and select. synthesize (which also needs an arbiter
-// agent) arrives next; until then an unregistered strategy fails at runtime
-// with a clear "not implemented yet" message from the engine.
+// Default registers all three strategies: merge, select, and synthesize.
 func Default() Registry {
 	return Registry{
-		flow.JoinMerge:  Merge{},
-		flow.JoinSelect: Select{},
+		flow.JoinMerge:      Merge{},
+		flow.JoinSelect:     Select{},
+		flow.JoinSynthesize: Synthesize{},
 	}
 }
 

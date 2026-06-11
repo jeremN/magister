@@ -64,14 +64,16 @@ func TestEngineFanOutFanIn(t *testing.T) {
 			Gate: flow.Gate{Policy: flow.GateAuto, Verifier: &flow.Verifier{Command: "true"}}},
 		{ID: "ui", Needs: []string{"plan"}, Agent: "gemini", Workspace: flow.WSIsolated,
 			Gate: flow.Gate{Policy: flow.GateAuto, Verifier: &flow.Verifier{Command: "true"}}},
-		{ID: "integrate", Needs: []string{"api", "ui"},
+		{ID: "integrate", Needs: []string{"api", "ui"}, Workspace: flow.WSIsolated,
 			Join: &flow.Join{Strategy: flow.JoinMerge}, Gate: flow.Gate{Policy: flow.GateManual}},
 	}}
 	if err := flow.Validate(f); err != nil {
 		t.Fatalf("flow invalid: %v", err)
 	}
 
-	eng, st, bus := newEngine(t, mocks(), semaphore.NewWeighted(4))
+	eng, st := newGitEngine(t, mocks())
+	eng.Sem = semaphore.NewWeighted(4)
+	bus := eng.Bus.(*event.Bus)
 	mustCreate(t, st, "r1", f)
 	ch, unsub := bus.Subscribe(64)
 
@@ -155,17 +157,18 @@ func TestEngineWideFanInNoDeadlock(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		id := fmt.Sprintf("w%d", i)
 		needs = append(needs, id)
-		steps = append(steps, &flow.Step{ID: id, Needs: []string{"root"}, Agent: "sonnet",
+		steps = append(steps, &flow.Step{ID: id, Needs: []string{"root"}, Agent: "sonnet", Workspace: flow.WSIsolated,
 			Gate: flow.Gate{Policy: flow.GateManual}})
 	}
-	steps = append(steps, &flow.Step{ID: "join", Needs: needs,
+	steps = append(steps, &flow.Step{ID: "join", Needs: needs, Workspace: flow.WSIsolated,
 		Join: &flow.Join{Strategy: flow.JoinMerge}, Gate: flow.Gate{Policy: flow.GateManual}})
 	f := &flow.Flow{Name: "wide", Concurrency: 2, Steps: steps}
 	if err := flow.Validate(f); err != nil {
 		t.Fatalf("invalid: %v", err)
 	}
 
-	eng, st, _ := newEngine(t, mocks(), semaphore.NewWeighted(2))
+	eng, st := newGitEngine(t, mocks())
+	eng.Sem = semaphore.NewWeighted(2)
 	mustCreate(t, st, "r1", f)
 
 	done := make(chan error, 1)
@@ -838,23 +841,14 @@ func (p pickExec) Run(_ context.Context, t core.Task) (core.Result, error) {
 	return core.Result{StepID: t.StepID, Summary: "choosing\nSELECTED: " + p.pick, CostUSD: 0.02}, nil
 }
 
-// synthExec is a test arbiter that writes one merged file and returns it.
-type synthExec struct{}
-
-func (synthExec) Run(_ context.Context, t core.Task) (core.Result, error) {
-	out := filepath.Join(t.WorkDir, "synthesis.md")
-	if err := os.WriteFile(out, []byte("merged"), 0o644); err != nil {
-		return core.Result{}, err
-	}
-	return core.Result{StepID: t.StepID, Summary: "synthesized", Artifacts: []core.Artifact{{StepID: t.StepID, Path: out}}, CostUSD: 0.03}, nil
-}
-
-// fanInFlow builds a two-upstream-mock fan-in into a join step `j`.
+// fanInFlow builds a two-upstream-mock fan-in into a join step `j`. The steps are
+// isolated so the flow is valid under the join validator (joins require isolated
+// upstreams); on the plain Manager the join still degrades to path-only inputs.
 func fanInFlow(j *flow.Join) *flow.Flow {
 	return &flow.Flow{Name: "fanin", Steps: []*flow.Step{
-		{ID: "a", Agent: "mock"},
-		{ID: "b", Agent: "mock"},
-		{ID: "j", Needs: []string{"a", "b"}, Join: j},
+		{ID: "a", Agent: "mock", Workspace: flow.WSIsolated},
+		{ID: "b", Agent: "mock", Workspace: flow.WSIsolated},
+		{ID: "j", Needs: []string{"a", "b"}, Workspace: flow.WSIsolated, Join: j},
 	}}
 }
 
@@ -886,29 +880,37 @@ func TestSelectJoinForwardsWinner(t *testing.T) {
 }
 
 func TestSynthesizeJoinReturnsMergedOutput(t *testing.T) {
-	st := store.NewMem()
-	e := &Engine{
-		Execs: map[string]core.Executor{"mock": executor.Mock{Name: "mock"}, "arbiter": synthExec{}},
-		WS:    &workspace.Manager{Root: t.TempDir()},
-		Gate:  &gate.Evaluator{Approver: gate.AutoApprover{}, Verifier: gate.CommandVerifier{}},
-		Joins: join.Default(),
-		Store: st, Bus: event.NewBus(), Clock: fakeClock{},
+	execs := map[string]core.Executor{
+		"a":       fileWriterExec{file: "shared.md", body: "A"},
+		"b":       fileWriterExec{file: "shared.md", body: "B"},
+		"arbiter": fileWriterExec{file: "shared.md", body: "RECONCILED", cost: 0.05}, // distinct from upstreams' 0.01
 	}
-	f := fanInFlow(&flow.Join{Strategy: flow.JoinSynthesize, Agent: "arbiter"})
+	eng, st := newGitEngine(t, execs)
+	f := &flow.Flow{Name: "fanin", Steps: []*flow.Step{
+		{ID: "a", Agent: "a", Workspace: flow.WSIsolated, Gate: flow.Gate{Policy: flow.GateAuto, Verifier: &flow.Verifier{Command: "true"}}},
+		{ID: "b", Agent: "b", Workspace: flow.WSIsolated, Gate: flow.Gate{Policy: flow.GateAuto, Verifier: &flow.Verifier{Command: "true"}}},
+		{ID: "j", Needs: []string{"a", "b"}, Workspace: flow.WSIsolated,
+			Join: &flow.Join{Strategy: flow.JoinSynthesize, Agent: "arbiter"}},
+	}}
 	mustCreate(t, st, "r1", f)
-	if err := e.Run(context.Background(), "r1", f); err != nil {
+	if err := eng.Run(context.Background(), "r1", f); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	got, _ := st.GetRun(context.Background(), "r1")
-	j := got.Steps[2]
+	var j core.StepState
+	for _, s := range got.Steps {
+		if s.StepID == "j" {
+			j = s
+		}
+	}
 	if j.Status != core.StepSucceeded {
-		t.Fatalf("join status = %q, want succeeded", j.Status)
+		t.Fatalf("synthesize join status = %q, want succeeded", j.Status)
 	}
-	if len(j.Artifacts) != 1 || filepath.Base(j.Artifacts[0].Path) != "synthesis.md" {
-		t.Fatalf("join artifacts = %v, want the synthesized synthesis.md", j.Artifacts)
+	if len(j.Artifacts) == 0 || j.Artifacts[0].Branch != "step/j" {
+		t.Fatalf("synthesize result not committed on its branch: %+v", j.Artifacts)
 	}
-	if j.CostUSD != 0.03 {
-		t.Errorf("join cost = %v, want the arbiter's 0.03 (not the upstream mock's 0.01)", j.CostUSD)
+	if j.CostUSD != 0.05 {
+		t.Errorf("synthesize cost = %v, want the arbiter's 0.05 (not the upstreams' 0.01)", j.CostUSD)
 	}
 }
 
@@ -1121,17 +1123,25 @@ func TestJoinConflictEscalateRejectAborts(t *testing.T) {
 
 // fileWriterExec writes a fixed filename with fixed content, so two such steps
 // in separate worktrees collide on merge (used to drive the conflict ladder).
-type fileWriterExec struct{ file, body string }
+// cost defaults to 0.01 when zero, so callers that only set file/body are unchanged.
+type fileWriterExec struct {
+	file, body string
+	cost       float64
+}
 
 func (e fileWriterExec) Run(_ context.Context, t core.Task) (core.Result, error) {
 	out := filepath.Join(t.WorkDir, e.file)
 	if err := os.WriteFile(out, []byte(e.body), 0o644); err != nil {
 		return core.Result{}, err
 	}
+	cost := e.cost
+	if cost == 0 {
+		cost = 0.01
+	}
 	// Return the written file as an artifact so an isolated step's commitIsolated
 	// stamps its branch onto it — the merge join needs branch-backed inputs.
 	return core.Result{StepID: t.StepID, Summary: "wrote " + e.file,
-		Artifacts: []core.Artifact{{StepID: t.StepID, Path: out}}, CostUSD: 0.01}, nil
+		Artifacts: []core.Artifact{{StepID: t.StepID, Path: out}}, CostUSD: cost}, nil
 }
 
 func conflictFlow(onConflict flow.FailPolicy) *flow.Flow {

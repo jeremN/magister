@@ -35,6 +35,8 @@ func TestValidateRejections(t *testing.T) {
 			f.Steps[0].Gate = Gate{Policy: GateConditional, Condition: &Condition{Expr: "not valid +++"}}
 		},
 		"select without agent": func(f *Flow) {
+			f.Steps[0].Workspace = WSIsolated
+			f.Steps[1].Workspace = WSIsolated
 			f.Steps[1].Agent = ""
 			f.Steps[1].Join = &Join{Strategy: JoinSelect}
 		},
@@ -44,6 +46,8 @@ func TestValidateRejections(t *testing.T) {
 		},
 		"negative concurrency": func(f *Flow) { f.Concurrency = -1 },
 		"bad join on_conflict": func(f *Flow) {
+			f.Steps[0].Workspace = WSIsolated
+			f.Steps[1].Workspace = WSIsolated
 			f.Steps[1].Agent = ""
 			f.Steps[1].Gate = Gate{Policy: GateManual}
 			f.Steps[1].Join = &Join{Strategy: JoinMerge, OnConflict: "bogus"}
@@ -57,6 +61,58 @@ func TestValidateRejections(t *testing.T) {
 				t.Fatalf("%s: expected error, got nil", name)
 			}
 		})
+	}
+}
+
+func TestValidateJoinRequiresIsolatedUpstreams(t *testing.T) {
+	f := &Flow{Name: "f", Steps: []*Step{
+		{ID: "a", Agent: "m", Workspace: WSShared, Gate: Gate{Policy: GateAuto, Verifier: &Verifier{Command: "true"}}},
+		{ID: "j", Needs: []string{"a"}, Workspace: WSIsolated, Join: &Join{Strategy: JoinMerge}},
+	}}
+	if err := Validate(f); err == nil {
+		t.Fatal("a join over a shared upstream must be rejected")
+	}
+}
+
+func TestValidateJoinMustBeIsolated(t *testing.T) {
+	f := &Flow{Name: "f", Steps: []*Step{
+		{ID: "a", Agent: "m", Workspace: WSIsolated, Gate: Gate{Policy: GateAuto, Verifier: &Verifier{Command: "true"}}},
+		{ID: "j", Needs: []string{"a"}, Workspace: WSShared, Join: &Join{Strategy: JoinMerge}},
+	}}
+	if err := Validate(f); err == nil {
+		t.Fatal("a join step itself must be isolated")
+	}
+}
+
+func TestValidateMergeEscalateRequiresAgent(t *testing.T) {
+	f := &Flow{Name: "f", Steps: []*Step{
+		{ID: "a", Agent: "m", Workspace: WSIsolated, Gate: Gate{Policy: GateAuto, Verifier: &Verifier{Command: "true"}}},
+		{ID: "j", Needs: []string{"a"}, Workspace: WSIsolated, Join: &Join{Strategy: JoinMerge, OnConflict: FailEscalate}},
+	}}
+	if err := Validate(f); err == nil {
+		t.Fatal("merge + on_conflict=escalate requires an arbiter agent")
+	}
+}
+
+func TestValidateJoinRetryRequiresRetryPolicy(t *testing.T) {
+	f := &Flow{Name: "f", Steps: []*Step{
+		{ID: "a", Agent: "m", Workspace: WSIsolated, Gate: Gate{Policy: GateAuto, Verifier: &Verifier{Command: "true"}}},
+		{ID: "j", Needs: []string{"a"}, Workspace: WSIsolated, Join: &Join{Strategy: JoinMerge, OnConflict: FailRetry}},
+	}}
+	if err := Validate(f); err == nil {
+		t.Fatal("on_conflict=retry requires a retry policy")
+	}
+}
+
+func TestValidateAcceptsIsolatedJoin(t *testing.T) {
+	f := &Flow{Name: "f", Steps: []*Step{
+		{ID: "a", Agent: "m", Workspace: WSIsolated, Gate: Gate{Policy: GateAuto, Verifier: &Verifier{Command: "true"}}},
+		{ID: "b", Agent: "m", Workspace: WSIsolated, Gate: Gate{Policy: GateAuto, Verifier: &Verifier{Command: "true"}}},
+		{ID: "j", Needs: []string{"a", "b"}, Workspace: WSIsolated,
+			Join: &Join{Strategy: JoinMerge, Agent: "m", OnConflict: FailEscalate}, Gate: Gate{Policy: GateManual}},
+	}}
+	if err := Validate(f); err != nil {
+		t.Fatalf("a well-formed isolated merge+escalate join must be accepted, got: %v", err)
 	}
 }
 

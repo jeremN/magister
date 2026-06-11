@@ -23,7 +23,9 @@ steps:
 
   - id: integrate
     needs: [impl-api, impl-ui]
+    workspace: isolated
     join:
       strategy: merge
+      agent: opus
       on_conflict: escalate
     gate: { policy: manual }

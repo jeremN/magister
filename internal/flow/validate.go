@@ -50,7 +50,7 @@ func Validate(f *Flow) error {
 		if err := validateGate(s); err != nil {
 			return err
 		}
-		if err := validateJoin(s); err != nil {
+		if err := validateJoin(s, byID); err != nil {
 			return err
 		}
 		if s.Retry != nil && s.Retry.Max < 1 {
@@ -98,13 +98,23 @@ func validateGate(s *Step) error {
 	return nil
 }
 
-func validateJoin(s *Step) error {
+func validateJoin(s *Step, byID map[string]*Step) error {
 	if s.Join == nil {
 		return nil
 	}
+	if s.Workspace != WSIsolated {
+		return fmt.Errorf("step %q: a join step must be workspace: isolated", s.ID)
+	}
+	for _, dep := range s.Needs {
+		if up, ok := byID[dep]; ok && up.Workspace != WSIsolated {
+			return fmt.Errorf("step %q: join upstream %q must be workspace: isolated", s.ID, dep)
+		}
+	}
 	switch s.Join.Strategy {
 	case JoinMerge:
-		// no arbiter needed
+		if s.Join.OnConflict == FailEscalate && s.Join.Agent == "" {
+			return fmt.Errorf("step %q: merge with on_conflict=escalate requires an arbiter agent", s.ID)
+		}
 	case JoinSelect, JoinSynthesize:
 		if s.Join.Agent == "" {
 			return fmt.Errorf("step %q: %q join requires an arbiter agent", s.ID, s.Join.Strategy)
@@ -117,6 +127,9 @@ func validateJoin(s *Step) error {
 		// ok
 	default:
 		return fmt.Errorf("step %q: unknown join on_conflict %q", s.ID, s.Join.OnConflict)
+	}
+	if s.Join.OnConflict == FailRetry && s.Retry == nil {
+		return fmt.Errorf("step %q: on_conflict=retry requires a retry policy", s.ID)
 	}
 	if len(s.Needs) == 0 {
 		return fmt.Errorf("step %q: join step must depend on at least one step", s.ID)

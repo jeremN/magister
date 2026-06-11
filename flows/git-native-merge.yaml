@@ -1,0 +1,32 @@
+name: git-native-merge
+concurrency: 2
+
+# Git-native fan-in: two ISOLATED upstreams each commit their worktree to a branch
+# (step/build-api, step/build-ui); the `merge` join does a real `git merge` of those
+# branches into its own worktree and commits the merged tree. Runs zero-cost with the
+# `mock` agent (which writes a unique <id>.out.md per step, so the merge is clean).
+#
+# Git-native joins REQUIRE the join step AND all its upstreams to be workspace: isolated
+# (that is what gives each one a branch to merge). Auto gates keep it non-blocking in the
+# real daemon (an un-gated fan-in upstream defaults to a manual gate and would block).
+steps:
+  - id: build-api
+    agent: mock
+    role: implementer
+    workspace: isolated
+    prompt: "build the api"
+    gate: { policy: auto, verifier: { command: "true" } }
+
+  - id: build-ui
+    agent: mock
+    role: implementer
+    workspace: isolated
+    prompt: "build the ui"
+    gate: { policy: auto, verifier: { command: "true" } }
+
+  - id: integrate
+    needs: [build-api, build-ui]
+    workspace: isolated
+    join:
+      strategy: merge
+    gate: { policy: auto, verifier: { command: "true" } }

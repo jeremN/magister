@@ -76,9 +76,15 @@ pkill -TERM -f /tmp/magisterd    # SIGTERM = graceful shutdown (drains, then exi
 rm -rf /tmp/cm-demo
 ```
 
+## Git-native joins (merge / select / synthesize)
+
+The `merge` join now does a **real `git merge`** of its upstream branches (no longer a manifest). Requirement: a join step **and every step in its `Needs`** must be `workspace: isolated` — that gives each one a `step/<id>` branch to merge. The validator rejects a non-isolated join or upstream, and rejects `merge` + `on_conflict: escalate` without a `join.agent` (the conflict arbiter). Give fan-in upstreams **auto gates** or they default to manual and block.
+
+Zero-cost runnable demo: **`flows/git-native-merge.yaml`** (two isolated `mock` upstreams → `merge` join). Expected SSE: `run.started → step.started×2 → step.done×2 → step.started(integrate) → step.done "merged 2 branch(es)" → run.done`. Confirm a *real* merge (not a manifest): `cm get <run>` shows `integrate`'s artifacts are the merged files of both upstreams, and `git -C <runs>/<run>/base log --graph --all` shows `step/integrate` as a 2-parent merge commit.
+
 ## Gotchas (each cost real time to learn)
 
-- **`flows/feature-flow.yaml` does NOT run standalone.** It references the unregistered `gemini` agent, the unimplemented `merge` join, `manual` gates (would block on `cm approve`), and pricey `opus`. Write a minimal flow as above instead.
+- **`flows/feature-flow.yaml` does NOT run standalone.** It references the unregistered `gemini` agent, `manual` gates (would block on `cm approve`), and pricey `opus`. (Its `integrate` step is now a valid git-native `merge`+`escalate` join — isolated, with a `join.agent` — but the surrounding agents still make it a poor quick smoke.) Use `flows/git-native-merge.yaml` for a mock merge smoke, or write a minimal flow as above.
 - **A nested `claude` inherits your global Claude Code SessionStart hooks** — adds startup latency and floods the raw stream with `system`/`hook_started`/`thinking`/`rate_limit_event` lines. Harmless: the daemon's parser ignores every line type except `assistant` (tool_use) and `result`; only milestone + lifecycle events reach SSE.
 - **Inside the Claude Code sandbox:** the daemon's `claude` child needs network egress + Keychain access. Launch the daemon (and any direct `claude` smoke) with the sandbox disabled, or it fails on the API call.
 - **Port/addr:** daemon defaults to `127.0.0.1:8080`; `cm` targets `$MAGISTER_ADDR` (default `http://127.0.0.1:8080`). Use `-addr` + `MAGISTER_ADDR` to avoid collisions, as above.

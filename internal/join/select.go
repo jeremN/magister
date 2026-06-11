@@ -14,11 +14,7 @@ import (
 type Select struct{}
 
 func (Select) Join(ctx context.Context, s *flow.Step, inputs []core.Artifact, workDir string, run RunAgent) (core.Result, error) {
-	staged, err := stageCandidates(inputs, workDir)
-	if err != nil {
-		return core.Result{}, err
-	}
-	res, err := run(ctx, s.Join.Agent, selectPrompt(s, staged), workDir, inputs)
+	res, err := run(ctx, s.Join.Agent, selectPrompt(s, inputs), workDir, inputs)
 	if err != nil {
 		return core.Result{}, fmt.Errorf("select: arbiter failed: %w", err)
 	}
@@ -29,8 +25,9 @@ func (Select) Join(ctx context.Context, s *flow.Step, inputs []core.Artifact, wo
 	if !isDependency(s, winner) {
 		return core.Result{}, fmt.Errorf("select: chosen step %q is not a dependency", winner)
 	}
-	// Forward the winner's original artifacts by reference. A winner that produced
-	// no artifacts forwards an empty set; the arbiter's rationale still rides on Summary.
+	// Forward the winner's original artifacts (with their branch/commit) by reference.
+	// A winner that produced no artifacts forwards an empty set; the arbiter's
+	// rationale still rides on Summary.
 	var artifacts []core.Artifact
 	for _, in := range inputs {
 		if in.StepID == winner {
@@ -62,13 +59,18 @@ func isDependency(s *flow.Step, id string) bool {
 	return false
 }
 
-// selectPrompt lists each candidate's staged files and asks for a SELECTED token.
-func selectPrompt(s *flow.Step, staged map[string][]string) string {
+// selectPrompt lists each candidate's files (at their upstream-worktree paths)
+// and asks for a SELECTED token.
+func selectPrompt(s *flow.Step, inputs []core.Artifact) string {
+	byStep := map[string][]string{}
+	for _, in := range inputs {
+		byStep[in.StepID] = append(byStep[in.StepID], in.Path)
+	}
 	var b strings.Builder
 	b.WriteString("You are choosing the single best candidate implementation.\n\n")
 	for _, dep := range s.Needs {
 		fmt.Fprintf(&b, "Candidate %s:\n", dep)
-		for _, p := range staged[dep] {
+		for _, p := range byStep[dep] {
 			fmt.Fprintf(&b, "  - %s\n", p)
 		}
 	}

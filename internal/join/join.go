@@ -4,8 +4,6 @@ package join
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 
 	"concentus/internal/core"
 	"concentus/internal/flow"
@@ -34,41 +32,6 @@ func Default() Registry {
 		flow.JoinSelect:     Select{},
 		flow.JoinSynthesize: Synthesize{},
 	}
-}
-
-// stageCandidates copies each input artifact into <workDir>/.candidates/<stepID>/<base>
-// so the arbiter can read every candidate from within its own workspace, and returns
-// the staged relative paths grouped by source step (for the prompt). select uses these
-// read-only; synthesize excludes the .candidates dir from its result.
-func stageCandidates(inputs []core.Artifact, workDir string) (map[string][]string, error) {
-	staged := make(map[string][]string)
-	used := make(map[string]bool) // dest paths written this call, to avoid basename collisions
-	for _, in := range inputs {
-		destDir := filepath.Join(workDir, ".candidates", in.StepID)
-		if err := os.MkdirAll(destDir, 0o755); err != nil {
-			return nil, err
-		}
-		data, err := os.ReadFile(in.Path)
-		if err != nil {
-			return nil, fmt.Errorf("stage candidate %s: %w", in.Path, err)
-		}
-		base := filepath.Base(in.Path)
-		dest := filepath.Join(destDir, base)
-		for i := 1; used[dest]; i++ {
-			dest = filepath.Join(destDir, fmt.Sprintf("%d-%s", i, base))
-		}
-		used[dest] = true
-		// staging copies are read-only context for the arbiter; source file mode is not preserved.
-		if err := os.WriteFile(dest, data, 0o644); err != nil {
-			return nil, err
-		}
-		rel, err := filepath.Rel(workDir, dest)
-		if err != nil {
-			return nil, err
-		}
-		staged[in.StepID] = append(staged[in.StepID], rel)
-	}
-	return staged, nil
 }
 
 // Merge does a real git merge of the upstream branches into the join's worktree.

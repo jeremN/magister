@@ -151,7 +151,10 @@ func TestEngineCancellation(t *testing.T) {
 func TestEngineWideFanInNoDeadlock(t *testing.T) {
 	// 20 parallel steps feeding one merge, under a global semaphore of 2 and a
 	// per-run cap of 2. If tokens were held while waiting on deps, the join would
-	// deadlock. It must finish well within the timeout.
+	// deadlock. The timeout only distinguishes "completes" from "hangs forever":
+	// 20 real git worktrees + a 20-branch merge take a few seconds, and much longer
+	// under CI load, so the bound is generous on purpose (a true deadlock never
+	// returns regardless).
 	steps := []*flow.Step{{ID: "root", Agent: "opus", Gate: flow.Gate{Policy: flow.GateManual}}}
 	var needs []string
 	for i := 0; i < 20; i++ {
@@ -178,7 +181,7 @@ func TestEngineWideFanInNoDeadlock(t *testing.T) {
 		if err != nil {
 			t.Fatalf("run: %v", err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("DEADLOCK: wide fan-in did not complete")
 	}
 	got, _ := st.GetRun(context.Background(), "r1")

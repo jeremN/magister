@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	osexec "os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -42,6 +43,7 @@ func newEngine(t *testing.T, exec map[string]core.Executor, sem *semaphore.Weigh
 
 func mocks() map[string]core.Executor {
 	return map[string]core.Executor{
+		"mock":   executor.Mock{Name: "mock"},
 		"opus":   executor.Mock{Name: "opus"},
 		"sonnet": executor.Mock{Name: "sonnet"},
 		"gemini": executor.Mock{Name: "gemini"},
@@ -1040,6 +1042,44 @@ func TestJoinConflictRetryExhaustsBudgetThenFails(t *testing.T) {
 	got, _ := st.GetRun(context.Background(), "r1")
 	if j := joinStep(t, got); j.Status != core.StepFailed {
 		t.Fatalf("join status = %q, want failed after budget exhausted", j.Status)
+	}
+}
+
+// newGitEngine wires an engine whose workspace is a real GitManager, so isolated
+// steps commit and joins can git-merge. Returns the engine and its store.
+func newGitEngine(t *testing.T, execs map[string]core.Executor) (*Engine, *store.Mem) {
+	t.Helper()
+	if _, err := osexec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	st := store.NewMem()
+	return &Engine{
+		Execs: execs,
+		WS:    &workspace.GitManager{Root: t.TempDir()},
+		Gate:  &gate.Evaluator{Approver: gate.AutoApprover{}, Verifier: gate.CommandVerifier{}},
+		Joins: join.Default(),
+		Store: st,
+		Bus:   event.NewBus(),
+		Clock: core.SystemClock{},
+	}, st
+}
+
+func TestIsolatedStepCommitsAndStampsRefs(t *testing.T) {
+	eng, st := newGitEngine(t, mocks())
+	f := &flow.Flow{Name: "f", Steps: []*flow.Step{
+		{ID: "a", Agent: "mock", Workspace: flow.WSIsolated,
+			Gate: flow.Gate{Policy: flow.GateAuto, Verifier: &flow.Verifier{Command: "true"}}},
+	}}
+	if err := st.CreateRun(context.Background(), core.RunState{ID: "r1", Name: "f", Status: core.RunPending}); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Run(context.Background(), "r1", f); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	got, _ := st.GetRun(context.Background(), "r1")
+	arts := got.Steps[0].Artifacts
+	if len(arts) == 0 || arts[0].Branch != "step/a" || arts[0].Commit == "" {
+		t.Fatalf("isolated step artifacts not stamped with refs: %+v", arts)
 	}
 }
 

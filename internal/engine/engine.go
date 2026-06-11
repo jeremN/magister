@@ -248,9 +248,13 @@ func (e *Engine) runStep(ctx context.Context, runID core.RunID, s *flow.Step, in
 
 		res, gateFailed, execErr := e.attempt(ctx, runID, s, inputs, attempt, workDir)
 		if execErr == nil {
-			e.transition(ctx, runID, stepState(runID, s.ID, core.StepSucceeded, attempt, workDir, res, nil),
-				event.Event{StepID: s.ID, Kind: event.StepDone, Summary: res.Summary, CostUSD: res.CostUSD, Attempt: attempt})
-			return res, nil
+			if cerr := e.commitIsolated(runID, s, workDir, &res); cerr != nil {
+				execErr = cerr // a failed commit is a step failure → normal disposition
+			} else {
+				e.transition(ctx, runID, stepState(runID, s.ID, core.StepSucceeded, attempt, workDir, res, nil),
+					event.Event{StepID: s.ID, Kind: event.StepDone, Summary: res.Summary, CostUSD: res.CostUSD, Attempt: attempt})
+				return res, nil
+			}
 		}
 		lastErr = execErr
 
@@ -363,6 +367,25 @@ func (e *Engine) execute(ctx context.Context, runID core.RunID, s *flow.Step, in
 		return strat.Join(ctx, s, inputs, workDir, run)
 	}
 	return e.runAgent(ctx, runID, s.ID, s.Role, s.Agent, promptFor(s, inputs), workDir, attemptNum, inputs)
+}
+
+// commitIsolated records a successful isolated NON-join step's worktree on its
+// branch and stamps the result's artifacts with the branch/commit. Joins
+// self-commit (the strategy does the git work) and shared steps have no branch,
+// so both are skipped. A commit failure is surfaced as a step failure.
+func (e *Engine) commitIsolated(runID core.RunID, s *flow.Step, workDir string, res *core.Result) error {
+	if s.Workspace != flow.WSIsolated || s.Join != nil {
+		return nil
+	}
+	br, sha, err := e.WS.Commit(runID, s, workDir)
+	if err != nil {
+		return fmt.Errorf("commit step %q: %w", s.ID, err)
+	}
+	for i := range res.Artifacts {
+		res.Artifacts[i].Branch = br
+		res.Artifacts[i].Commit = sha
+	}
+	return nil
 }
 
 // maxBackoff caps exponential backoff before jitter, so a high retry count can't

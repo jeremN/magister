@@ -10,64 +10,69 @@ import (
 	"concentus/internal/flow"
 )
 
-func synthesizeStep() *flow.Step {
-	return &flow.Step{ID: "merge", Needs: []string{"a", "b"},
-		Join: &flow.Join{Strategy: flow.JoinSynthesize, Agent: "arbiter"}}
+func TestSynthesizeAutoMergesWithoutArbiter(t *testing.T) {
+	joinDir, inputs := setupJoinRepo(t, false) // disjoint files → no conflict
+	run := func(context.Context, string, string, string, []core.Artifact) (core.Result, error) {
+		t.Fatal("arbiter must not be called when the merge has no conflicts")
+		return core.Result{}, nil
+	}
+	res, err := Synthesize{}.Join(context.Background(), joinStep(flow.JoinSynthesize, ""), inputs, joinDir, run)
+	if err != nil {
+		t.Fatalf("synthesize: %v", err)
+	}
+	got := map[string]bool{}
+	for _, a := range res.Artifacts {
+		got[filepath.Base(a.Path)] = true
+	}
+	if !got["a.txt"] || !got["b.txt"] {
+		t.Fatalf("auto-merged tree missing files: %+v", res.Artifacts)
+	}
 }
 
-func TestSynthesizeReturnsArbiterOutput(t *testing.T) {
-	dir := t.TempDir()
-	in := writeArtifact(t, t.TempDir(), "a", "a.out.md", "A")
-	out := filepath.Join(dir, "synthesis.md")
-	// The arbiter "writes" synthesis.md; the stub reports it as its artifact.
+func TestSynthesizeArbiterResolvesConflict(t *testing.T) {
+	joinDir, inputs := setupJoinRepo(t, true) // both write shared.txt → conflict
 	run := func(_ context.Context, _, _, wd string, _ []core.Artifact) (core.Result, error) {
-		if err := os.WriteFile(out, []byte("merged"), 0o644); err != nil {
-			return core.Result{}, err
+		if err := os.WriteFile(filepath.Join(wd, "shared.txt"), []byte("reconciled"), 0o644); err != nil {
+			t.Fatal(err)
 		}
-		return core.Result{Summary: "synthesized", Artifacts: []core.Artifact{{StepID: "merge", Path: out}}, CostUSD: 0.05}, nil
+		return core.Result{Summary: "resolved", CostUSD: 0.03}, nil
 	}
-	res, err := Synthesize{}.Join(context.Background(), synthesizeStep(), []core.Artifact{in}, dir, run)
+	res, err := Synthesize{}.Join(context.Background(), joinStep(flow.JoinSynthesize, ""), inputs, joinDir, run)
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("synthesize: %v", err)
 	}
-	if len(res.Artifacts) != 1 || res.Artifacts[0].Path != out {
-		t.Fatalf("result artifacts = %+v, want only synthesis.md", res.Artifacts)
+	body, err := os.ReadFile(filepath.Join(joinDir, "shared.txt"))
+	if err != nil || string(body) != "reconciled" {
+		t.Fatalf("arbiter resolution not committed: body=%q err=%v", body, err)
 	}
-	if res.StepID != "merge" || res.CostUSD != 0.05 {
-		t.Errorf("result = %+v, want StepID=merge cost=0.05", res)
+	if res.CostUSD != 0.03 {
+		t.Errorf("arbiter cost not propagated: %v", res.CostUSD)
 	}
 }
 
-func TestSynthesizeExcludesStagedCandidates(t *testing.T) {
-	dir := t.TempDir()
-	in := writeArtifact(t, t.TempDir(), "a", "a.out.md", "A")
-	out := filepath.Join(dir, "synthesis.md")
-	staged := filepath.Join(dir, ".candidates", "a", "a.out.md")
-	// The stub reports BOTH the real output and a staged candidate path (as a
-	// real agent's discoverGit would). Only the real output must survive.
+func TestSynthesizeArbiterResolutionWithTrailingWhitespace(t *testing.T) {
+	joinDir, inputs := setupJoinRepo(t, true)
+	// A real arbiter may emit trailing whitespace; that must NOT be misread as a
+	// leftover conflict marker (the --check must ignore whitespace, only flag markers).
 	run := func(_ context.Context, _, _, wd string, _ []core.Artifact) (core.Result, error) {
-		_ = os.WriteFile(out, []byte("merged"), 0o644)
-		return core.Result{Summary: "ok", Artifacts: []core.Artifact{
-			{StepID: "merge", Path: staged},
-			{StepID: "merge", Path: out},
-		}}, nil
+		if err := os.WriteFile(filepath.Join(wd, "shared.txt"), []byte("resolved   \nline\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return core.Result{Summary: "resolved"}, nil
 	}
-	res, err := Synthesize{}.Join(context.Background(), synthesizeStep(), []core.Artifact{in}, dir, run)
+	_, err := Synthesize{}.Join(context.Background(), joinStep(flow.JoinSynthesize, ""), inputs, joinDir, run)
 	if err != nil {
-		t.Fatal(err)
-	}
-	if len(res.Artifacts) != 1 || res.Artifacts[0].Path != out {
-		t.Fatalf("result artifacts = %+v, want the staged .candidates path excluded", res.Artifacts)
+		t.Fatalf("a whitespace-laden but marker-free resolution must succeed, got: %v", err)
 	}
 }
 
-func TestSynthesizeEmptyOutputErrors(t *testing.T) {
-	dir := t.TempDir()
-	in := writeArtifact(t, t.TempDir(), "a", "a.out.md", "A")
-	// Arbiter produced nothing outside .candidates -> error.
-	run := stubRun(core.Result{Summary: "done", Artifacts: nil}, nil)
-	_, err := Synthesize{}.Join(context.Background(), synthesizeStep(), []core.Artifact{in}, dir, run)
+func TestSynthesizeArbiterLeavesMarkersFails(t *testing.T) {
+	joinDir, inputs := setupJoinRepo(t, true)
+	run := func(context.Context, string, string, string, []core.Artifact) (core.Result, error) {
+		return core.Result{Summary: "did nothing"}, nil // leaves markers
+	}
+	_, err := Synthesize{}.Join(context.Background(), joinStep(flow.JoinSynthesize, ""), inputs, joinDir, run)
 	if err == nil {
-		t.Fatal("expected an error when the arbiter produced no synthesized output")
+		t.Fatal("expected an error when the arbiter leaves unresolved conflicts")
 	}
 }

@@ -3,56 +3,60 @@ package join
 import (
 	"context"
 	"fmt"
-	"path/filepath"
-	"strings"
 
 	"concentus/internal/core"
 	"concentus/internal/flow"
 )
 
-// Synthesize asks the arbiter agent to read all candidates and write one
-// reconciled result into the join workdir; that written output is the result.
+// Synthesize merges every upstream branch into the join worktree, asking the
+// arbiter to resolve only the true conflicts (non-conflicting changes merge
+// automatically). The committed merged tree is the result.
 type Synthesize struct{}
 
 func (Synthesize) Join(ctx context.Context, s *flow.Step, inputs []core.Artifact, workDir string, run RunAgent) (core.Result, error) {
-	staged, err := stageCandidates(inputs, workDir)
+	branches := upstreamBranches(inputs)
+	if len(branches) == 0 {
+		return core.Result{}, fmt.Errorf("synthesize: no branch-backed inputs")
+	}
+	var cost float64
+	for _, br := range branches {
+		if _, err := gitCmd(workDir, "merge", "--no-edit", br); err == nil {
+			continue // clean merge auto-committed
+		}
+		conflicted := conflictedPaths(workDir)
+		if len(conflicted) == 0 {
+			return core.Result{}, fmt.Errorf("synthesize: merge %s failed without conflicts", br)
+		}
+		ares, aerr := run(ctx, s.Join.Agent, ResolveConflictPrompt(conflicted), workDir, inputs)
+		if aerr != nil {
+			_, _ = gitCmd(workDir, "merge", "--abort")
+			return core.Result{}, fmt.Errorf("synthesize: arbiter failed: %w", aerr)
+		}
+		cost += ares.CostUSD
+		// Stage the arbiter's writes, then scan the staged content for leftover
+		// conflict markers. The unmerged index is checked via the *staged* tree
+		// (conflictedPaths is index-state-based, so it would still report the path
+		// until `git add`). Whitespace rules are disabled so only genuine conflict
+		// markers fail the check — not trailing whitespace an arbiter may emit.
+		if _, err := gitCmd(workDir, "add", "-A"); err != nil {
+			_, _ = gitCmd(workDir, "merge", "--abort")
+			return core.Result{}, fmt.Errorf("synthesize: stage resolution of %s: %w", br, err)
+		}
+		if _, err := gitCmd(workDir,
+			"-c", "core.whitespace=-trailing-space,-blank-at-eol,-space-before-tab,-blank-at-eof",
+			"diff", "--cached", "--check"); err != nil {
+			_, _ = gitCmd(workDir, "merge", "--abort")
+			return core.Result{}, fmt.Errorf("synthesize: arbiter left unresolved conflicts in %v", conflicted)
+		}
+		if _, err := gitCmd(workDir, "commit", "--no-edit"); err != nil {
+			return core.Result{}, fmt.Errorf("synthesize: commit after resolving %s: %w", br, err)
+		}
+	}
+	res, err := CommittedResult(workDir, s)
 	if err != nil {
 		return core.Result{}, err
 	}
-	res, err := run(ctx, s.Join.Agent, synthesizePrompt(s, staged), workDir, inputs)
-	if err != nil {
-		return core.Result{}, fmt.Errorf("synthesize: arbiter failed: %w", err)
-	}
-	// Keep only the arbiter's new writes; the .candidates/ dir is reserved for
-	// staged inputs, so any artifact written there is intentionally dropped.
-	var artifacts []core.Artifact
-	for _, a := range res.Artifacts {
-		if !underCandidates(a.Path, workDir) {
-			artifacts = append(artifacts, core.Artifact{StepID: s.ID, Path: a.Path})
-		}
-	}
-	if len(artifacts) == 0 {
-		return core.Result{}, fmt.Errorf("synthesize: arbiter produced no output")
-	}
-	return core.Result{StepID: s.ID, Summary: res.Summary, Artifacts: artifacts, CostUSD: res.CostUSD}, nil
-}
-
-// underCandidates reports whether path is inside <workDir>/.candidates (a staged input).
-func underCandidates(path, workDir string) bool {
-	rel, err := filepath.Rel(filepath.Join(workDir, ".candidates"), path)
-	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
-}
-
-// synthesizePrompt lists each candidate's staged files and asks for a merged result.
-func synthesizePrompt(s *flow.Step, staged map[string][]string) string {
-	var b strings.Builder
-	b.WriteString("You are reconciling multiple candidate results into one.\n\n")
-	for _, dep := range s.Needs {
-		fmt.Fprintf(&b, "Candidate %s:\n", dep)
-		for _, p := range staged[dep] {
-			fmt.Fprintf(&b, "  - %s\n", p)
-		}
-	}
-	b.WriteString("\nRead all candidates and write a single reconciled result into the current directory.\n")
-	return b.String()
+	res.Summary = fmt.Sprintf("synthesized %d branch(es)", len(branches))
+	res.CostUSD = cost
+	return res, nil
 }

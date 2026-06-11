@@ -9,10 +9,15 @@ import (
 )
 
 // Artifact points at something a step produced on disk. The filesystem is the
-// source of truth for handoffs; artifacts are just pointers.
+// source of truth for handoffs; artifacts are just pointers. For a committed
+// isolated step, Branch/Commit also name the git ref that carries the work, so
+// fan-in joins can `git merge` it. Branch/Commit are empty for shared steps and
+// the mock executor (path-only).
 type Artifact struct {
 	StepID string
 	Path   string
+	Branch string
+	Commit string
 }
 
 // Task is what the engine hands an executor for one step attempt.

@@ -5,9 +5,11 @@
 package sqldb
 
 type Artifact struct {
-	RunID  string
-	StepID string
-	Path   string
+	RunID     string
+	StepID    string
+	Path      string
+	Branch    string
+	CommitSha string
 }
 
 type Event struct {

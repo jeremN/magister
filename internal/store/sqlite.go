@@ -176,7 +176,7 @@ func (s *SQLite) loadSteps(ctx context.Context, id core.RunID) ([]core.StepState
 	}
 	byStep := make(map[string][]core.Artifact, len(rows))
 	for _, a := range arts {
-		byStep[a.StepID] = append(byStep[a.StepID], core.Artifact{StepID: a.StepID, Path: a.Path})
+		byStep[a.StepID] = append(byStep[a.StepID], core.Artifact{StepID: a.StepID, Path: a.Path, Branch: a.Branch, Commit: a.CommitSha})
 	}
 	steps := make([]core.StepState, 0, len(rows))
 	for _, r := range rows {
@@ -227,7 +227,7 @@ func (s *SQLite) SaveStepTransition(ctx context.Context, st core.StepState, evs 
 	}
 	for _, a := range st.Artifacts {
 		if err := q.InsertArtifact(ctx, sqldb.InsertArtifactParams{
-			RunID: string(st.RunID), StepID: st.StepID, Path: a.Path,
+			RunID: string(st.RunID), StepID: st.StepID, Path: a.Path, Branch: a.Branch, CommitSha: a.Commit,
 		}); err != nil {
 			return err
 		}

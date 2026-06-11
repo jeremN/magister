@@ -42,8 +42,8 @@ FROM events WHERE run_id = ? AND seq > ? ORDER BY seq;
 DELETE FROM artifacts WHERE run_id = ? AND step_id = ?;
 
 -- name: InsertArtifact :exec
-INSERT INTO artifacts (run_id, step_id, path) VALUES (?, ?, ?)
+INSERT INTO artifacts (run_id, step_id, path, branch, commit_sha) VALUES (?, ?, ?, ?, ?)
 ON CONFLICT (run_id, step_id, path) DO NOTHING;
 
 -- name: ListArtifactsForRun :many
-SELECT run_id, step_id, path FROM artifacts WHERE run_id = ? ORDER BY step_id, path;
+SELECT run_id, step_id, path, branch, commit_sha FROM artifacts WHERE run_id = ? ORDER BY step_id, path;

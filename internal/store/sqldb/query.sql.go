@@ -120,18 +120,20 @@ func (q *Queries) GetRun(ctx context.Context, id string) (GetRunRow, error) {
 }
 
 const insertArtifact = `-- name: InsertArtifact :exec
-INSERT INTO artifacts (run_id, step_id, path) VALUES (?, ?, ?)
+INSERT INTO artifacts (run_id, step_id, path, branch, commit_sha) VALUES (?, ?, ?, ?, ?)
 ON CONFLICT (run_id, step_id, path) DO NOTHING
 `
 
 type InsertArtifactParams struct {
-	RunID  string
-	StepID string
-	Path   string
+	RunID     string
+	StepID    string
+	Path      string
+	Branch    string
+	CommitSha string
 }
 
 func (q *Queries) InsertArtifact(ctx context.Context, arg InsertArtifactParams) error {
-	_, err := q.db.ExecContext(ctx, insertArtifact, arg.RunID, arg.StepID, arg.Path)
+	_, err := q.db.ExecContext(ctx, insertArtifact, arg.RunID, arg.StepID, arg.Path, arg.Branch, arg.CommitSha)
 	return err
 }
 
@@ -169,7 +171,7 @@ func (q *Queries) InsertEvent(ctx context.Context, arg InsertEventParams) (int64
 }
 
 const listArtifactsForRun = `-- name: ListArtifactsForRun :many
-SELECT run_id, step_id, path FROM artifacts WHERE run_id = ? ORDER BY step_id, path
+SELECT run_id, step_id, path, branch, commit_sha FROM artifacts WHERE run_id = ? ORDER BY step_id, path
 `
 
 func (q *Queries) ListArtifactsForRun(ctx context.Context, runID string) ([]Artifact, error) {
@@ -181,7 +183,7 @@ func (q *Queries) ListArtifactsForRun(ctx context.Context, runID string) ([]Arti
 	var items []Artifact
 	for rows.Next() {
 		var i Artifact
-		if err := rows.Scan(&i.RunID, &i.StepID, &i.Path); err != nil {
+		if err := rows.Scan(&i.RunID, &i.StepID, &i.Path, &i.Branch, &i.CommitSha); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

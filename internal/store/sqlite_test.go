@@ -186,6 +186,29 @@ func TestSQLiteRejectsEventForUnknownRun(t *testing.T) {
 	}
 }
 
+func TestSQLiteArtifactRefsRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	s := tempDB(t)
+	if err := s.CreateRun(ctx, core.RunState{ID: "r1", Name: "f", FlowYAML: "x", Status: core.RunRunning}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveStepTransition(ctx,
+		core.StepState{RunID: "r1", StepID: "a", Status: core.StepSucceeded, Attempt: 1,
+			Artifacts: []core.Artifact{{StepID: "a", Path: "/w/a.md", Branch: "step/a", Commit: "deadbeef"}}},
+		nil); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetRun(ctx, "r1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	arts := got.Steps[0].Artifacts
+	if len(arts) != 1 || arts[0].StepID != "a" || arts[0].Path != "/w/a.md" ||
+		arts[0].Branch != "step/a" || arts[0].Commit != "deadbeef" {
+		t.Fatalf("artifact did not round-trip: %+v", arts)
+	}
+}
+
 func TestSQLiteLoadIncompleteRuns(t *testing.T) {
 	ctx := context.Background()
 	s := tempDB(t)

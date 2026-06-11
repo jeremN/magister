@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"concentus/internal/core"
 	"concentus/internal/flow"
@@ -72,23 +71,34 @@ func stageCandidates(inputs []core.Artifact, workDir string) (map[string][]strin
 	return staged, nil
 }
 
-// Merge writes a manifest listing every upstream artifact. With real worktrees
-// (M4) this becomes a git merge; the manifest keeps the pipeline observable now.
+// Merge does a real git merge of the upstream branches into the join's worktree.
+// A clean merge commits and returns the merged tree; a conflict is dispositioned
+// by on_conflict — escalate surfaces a *ConflictError (the engine runs the
+// resolve-then-approve ladder), anything else aborts the merge and fails.
 type Merge struct{}
 
 func (Merge) Join(_ context.Context, s *flow.Step, inputs []core.Artifact, workDir string, _ RunAgent) (core.Result, error) {
-	var b strings.Builder
-	fmt.Fprintf(&b, "# merge: %s\n", s.ID)
-	for _, in := range inputs {
-		fmt.Fprintf(&b, "- %s -> %s\n", in.StepID, in.Path)
+	branches := upstreamBranches(inputs)
+	if len(branches) == 0 {
+		return core.Result{}, fmt.Errorf("merge: no branch-backed inputs")
 	}
-	manifest := filepath.Join(workDir, s.ID+".merge.md")
-	if err := os.WriteFile(manifest, []byte(b.String()), 0o644); err != nil {
+	for _, br := range branches {
+		if _, err := gitCmd(workDir, "merge", "--no-edit", br); err != nil {
+			conflicted := conflictedPaths(workDir)
+			if len(conflicted) == 0 {
+				return core.Result{}, fmt.Errorf("merge %s: %w", br, err)
+			}
+			if s.Join.OnConflict == flow.FailEscalate {
+				return core.Result{}, &ConflictError{Branch: br, Paths: conflicted, WorkDir: workDir}
+			}
+			_, _ = gitCmd(workDir, "merge", "--abort")
+			return core.Result{}, fmt.Errorf("merge conflict in %v", conflicted)
+		}
+	}
+	res, err := CommittedResult(workDir, s)
+	if err != nil {
 		return core.Result{}, err
 	}
-	return core.Result{
-		StepID:    s.ID,
-		Summary:   fmt.Sprintf("merged %d branch(es)", len(inputs)),
-		Artifacts: []core.Artifact{{StepID: s.ID, Path: manifest}},
-	}, nil
+	res.Summary = fmt.Sprintf("merged %d branch(es)", len(branches))
+	return res, nil
 }

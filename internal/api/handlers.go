@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"path/filepath"
 	"time"
 
 	"concentus/internal/core"
@@ -25,6 +26,10 @@ type Server struct {
 	Log             *slog.Logger
 	BearerToken     string
 	ShutdownTimeout time.Duration
+	// ScratchRoot is the per-run scratch repo root (= GitManager.Root). When set and
+	// a run targets a real repo, GET /v1/runs/{id} surfaces <root>/<id>/base so the
+	// caller can find the result history. Empty disables the field.
+	ScratchRoot string
 }
 
 func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
@@ -81,7 +86,11 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "unknown run")
 		return
 	}
-	writeJSON(w, http.StatusOK, snapshotFromState(rs))
+	scratch := ""
+	if rs.Repo != "" && s.ScratchRoot != "" {
+		scratch = filepath.Join(s.ScratchRoot, string(rs.ID), "base")
+	}
+	writeJSON(w, http.StatusOK, snapshotFromState(rs, scratch))
 }
 
 func (s *Server) handleCancelRun(w http.ResponseWriter, r *http.Request) {

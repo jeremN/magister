@@ -29,6 +29,7 @@ type runSnapshot struct {
 	Concurrency int        `json:"concurrency"`
 	Error       string     `json:"error,omitempty"`
 	Steps       []stepDTO  `json:"steps"`
+	Scratch     string     `json:"scratch,omitempty"`
 }
 
 // runSummaryDTO is one row in GET /v1/runs.
@@ -49,11 +50,11 @@ type errorResponse struct {
 	Error string `json:"error"`
 }
 
-func snapshotFromState(rs core.RunState) runSnapshot {
+func snapshotFromState(rs core.RunState, scratch string) runSnapshot {
 	out := runSnapshot{
 		ID: rs.ID, Name: rs.Name, Status: string(rs.Status),
 		Concurrency: rs.Concurrency, Error: rs.Err,
-		Steps: make([]stepDTO, 0, len(rs.Steps)),
+		Steps: make([]stepDTO, 0, len(rs.Steps)), Scratch: scratch,
 	}
 	for _, st := range rs.Steps {
 		d := stepDTO{

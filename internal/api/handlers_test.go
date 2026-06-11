@@ -228,6 +228,53 @@ func TestCreateRunWithRepoPinsBase(t *testing.T) {
 	}
 }
 
+func TestGetRunSurfacesScratchPathForExternalRepo(t *testing.T) {
+	srv, _, st := newServerOnly(t)
+	srv.ScratchRoot = "/var/runs"
+	hs := httptest.NewServer(srv.Router(""))
+	defer hs.Close()
+
+	if err := st.CreateRun(context.Background(), core.RunState{
+		ID: "r1", Name: "f", Status: core.RunSucceeded, Repo: "/abs/proj", Base: "abc",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.Get(hs.URL + "/v1/runs/r1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var snap runSnapshot
+	if err := json.NewDecoder(resp.Body).Decode(&snap); err != nil {
+		t.Fatalf("decode snapshot: %v", err)
+	}
+	if snap.Scratch != filepath.Join("/var/runs", "r1", "base") {
+		t.Errorf("scratch = %q, want /var/runs/r1/base", snap.Scratch)
+	}
+}
+
+func TestGetRunOmitsScratchForSyntheticRun(t *testing.T) {
+	srv, _, st := newServerOnly(t)
+	srv.ScratchRoot = "/var/runs"
+	hs := httptest.NewServer(srv.Router(""))
+	defer hs.Close()
+
+	if err := st.CreateRun(context.Background(), core.RunState{
+		ID: "r2", Name: "f", Status: core.RunSucceeded, // no Repo
+	}); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.Get(hs.URL + "/v1/runs/r2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if strings.Contains(string(body), `"scratch"`) {
+		t.Errorf("synthetic run should omit the scratch field, body=%s", body)
+	}
+}
+
 func TestCreateRunRejectsBadRepo(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not on PATH")

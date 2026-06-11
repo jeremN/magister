@@ -69,9 +69,10 @@ func run(args []string, env func(string) string, stopCh <-chan struct{}, onListe
 
 	reg := supervisor.NewApprovalRegistry()
 	bus := event.NewBus()
+	runsRoot := filepath.Join(filepath.Dir(cfg.DBPath), "runs")
 	eng := &engine.Engine{
 		Execs: agents(),
-		WS:    &workspace.GitManager{Root: filepath.Join(filepath.Dir(cfg.DBPath), "runs")},
+		WS:    &workspace.GitManager{Root: runsRoot},
 		Gate:  &gate.Evaluator{Approver: &supervisor.RegistryApprover{Reg: reg}, Verifier: gate.CommandVerifier{}},
 		Joins: join.Default(),
 		Store: st, Bus: bus, Clock: core.SystemClock{}, Log: log,
@@ -83,7 +84,7 @@ func run(args []string, env func(string) string, stopCh <-chan struct{}, onListe
 		log.Error("resume incomplete runs", "err", err)
 	}
 
-	srv := &api.Server{Sup: sup, Store: st, Bus: bus, Log: log, BearerToken: cfg.BearerToken, ShutdownTimeout: cfg.ShutdownTimeout}
+	srv := &api.Server{Sup: sup, Store: st, Bus: bus, Log: log, BearerToken: cfg.BearerToken, ShutdownTimeout: cfg.ShutdownTimeout, ScratchRoot: runsRoot}
 	httpSrv := &http.Server{
 		Handler:      srv.Router(cfg.BearerToken),
 		ReadTimeout:  15 * time.Second,

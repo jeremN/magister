@@ -12,6 +12,7 @@ import (
 	"concentus/internal/event"
 	"concentus/internal/flow"
 	"concentus/internal/supervisor"
+	"concentus/internal/workspace"
 )
 
 const maxBodyBytes = 1 << 20 // 1 MiB flow uploads
@@ -41,7 +42,18 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid flow: "+err.Error())
 		return
 	}
-	id, err := s.Sup.Submit(r.Context(), f, string(body), "", "")
+	q := r.URL.Query()
+	repo := q.Get("repo")
+	base := ""
+	if repo != "" {
+		sha, err := workspace.ResolveBase(repo, q.Get("base"))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "repo: "+err.Error())
+			return
+		}
+		base = sha
+	}
+	id, err := s.Sup.Submit(r.Context(), f, string(body), repo, base)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

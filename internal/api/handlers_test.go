@@ -2,11 +2,17 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -163,4 +169,79 @@ func waitForStatus(t *testing.T, st core.Store, id core.RunID, want core.RunStat
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatalf("run %s never reached %s", id, want)
+}
+
+// setupAPISourceRepo builds a committed fixture repo (skips if git absent).
+func setupAPISourceRepo(t *testing.T) (string, string) {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	src := t.TempDir()
+	run := func(args ...string) string {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = src
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	run("init")
+	run("config", "user.name", "fix")
+	run("config", "user.email", "fix@example.com")
+	if err := os.WriteFile(filepath.Join(src, "hello.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("add", "-A")
+	run("commit", "-m", "base")
+	return src, run("rev-parse", "HEAD")
+}
+
+func TestCreateRunWithRepoPinsBase(t *testing.T) {
+	src, sha := setupAPISourceRepo(t)
+	hs, _, st := testServer(t)
+
+	resp, err := http.Post(
+		hs.URL+"/v1/runs?repo="+url.QueryEscape(src)+"&base=HEAD",
+		"application/x-yaml", bytes.NewBufferString(oneStepFlow))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 201: %s", resp.StatusCode, b)
+	}
+	var rr runResponse
+	if err := json.NewDecoder(resp.Body).Decode(&rr); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	waitForStatus(t, st, rr.ID, core.RunSucceeded)
+	rs, err := st.GetRun(context.Background(), rr.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rs.Repo != src || rs.Base != sha {
+		t.Errorf("persisted repo/base = %q/%q, want %q/%q", rs.Repo, rs.Base, src, sha)
+	}
+}
+
+func TestCreateRunRejectsBadRepo(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	hs, _, _ := testServer(t)
+	resp, err := http.Post(
+		hs.URL+"/v1/runs?repo=/no/such/repo",
+		"application/x-yaml", bytes.NewBufferString(oneStepFlow))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 400: %s", resp.StatusCode, b)
+	}
 }

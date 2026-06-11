@@ -33,6 +33,8 @@ type Run struct {
 	Error       string
 	CreatedAt   string
 	UpdatedAt   string
+	Repo        string
+	Base        string
 }
 
 type Step struct {

@@ -10,8 +10,8 @@ import (
 )
 
 const createRun = `-- name: CreateRun :exec
-INSERT INTO runs (id, name, flow_yaml, status, concurrency, error)
-VALUES (?, ?, ?, ?, ?, ?)
+INSERT INTO runs (id, name, flow_yaml, status, concurrency, error, repo, base)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type CreateRunParams struct {
@@ -21,6 +21,8 @@ type CreateRunParams struct {
 	Status      string
 	Concurrency int64
 	Error       string
+	Repo        string
+	Base        string
 }
 
 func (q *Queries) CreateRun(ctx context.Context, arg CreateRunParams) error {
@@ -31,6 +33,8 @@ func (q *Queries) CreateRun(ctx context.Context, arg CreateRunParams) error {
 		arg.Status,
 		arg.Concurrency,
 		arg.Error,
+		arg.Repo,
+		arg.Base,
 	)
 	return err
 }
@@ -93,7 +97,7 @@ func (q *Queries) EventsSince(ctx context.Context, arg EventsSinceParams) ([]Eve
 }
 
 const getRun = `-- name: GetRun :one
-SELECT id, name, flow_yaml, status, concurrency, error FROM runs WHERE id = ?
+SELECT id, name, flow_yaml, status, concurrency, error, repo, base FROM runs WHERE id = ?
 `
 
 type GetRunRow struct {
@@ -103,6 +107,8 @@ type GetRunRow struct {
 	Status      string
 	Concurrency int64
 	Error       string
+	Repo        string
+	Base        string
 }
 
 func (q *Queries) GetRun(ctx context.Context, id string) (GetRunRow, error) {
@@ -115,6 +121,8 @@ func (q *Queries) GetRun(ctx context.Context, id string) (GetRunRow, error) {
 		&i.Status,
 		&i.Concurrency,
 		&i.Error,
+		&i.Repo,
+		&i.Base,
 	)
 	return i, err
 }
@@ -198,7 +206,7 @@ func (q *Queries) ListArtifactsForRun(ctx context.Context, runID string) ([]Arti
 }
 
 const listIncompleteRuns = `-- name: ListIncompleteRuns :many
-SELECT id, name, flow_yaml, status, concurrency, error
+SELECT id, name, flow_yaml, status, concurrency, error, repo, base
 FROM runs WHERE status IN ('pending', 'running') ORDER BY created_at, id
 `
 
@@ -209,6 +217,8 @@ type ListIncompleteRunsRow struct {
 	Status      string
 	Concurrency int64
 	Error       string
+	Repo        string
+	Base        string
 }
 
 func (q *Queries) ListIncompleteRuns(ctx context.Context) ([]ListIncompleteRunsRow, error) {
@@ -227,6 +237,8 @@ func (q *Queries) ListIncompleteRuns(ctx context.Context) ([]ListIncompleteRunsR
 			&i.Status,
 			&i.Concurrency,
 			&i.Error,
+			&i.Repo,
+			&i.Base,
 		); err != nil {
 			return nil, err
 		}

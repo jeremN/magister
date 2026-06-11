@@ -209,6 +209,35 @@ func TestSQLiteArtifactRefsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestRunRepoBaseRoundTrip(t *testing.T) {
+	st := tempDB(t)
+	ctx := context.Background()
+
+	want := core.RunState{
+		ID: "r1", Name: "f", FlowYAML: "name: f\n", Status: core.RunPending,
+		Concurrency: 1, Repo: "/abs/path/proj", Base: "abc123def",
+	}
+	if err := st.CreateRun(ctx, want); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	got, err := st.GetRun(ctx, "r1")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Repo != want.Repo || got.Base != want.Base {
+		t.Errorf("GetRun repo/base = %q/%q, want %q/%q", got.Repo, got.Base, want.Repo, want.Base)
+	}
+
+	inc, err := st.LoadIncompleteRuns(ctx)
+	if err != nil {
+		t.Fatalf("load incomplete: %v", err)
+	}
+	if len(inc) != 1 || inc[0].Repo != want.Repo || inc[0].Base != want.Base {
+		t.Errorf("LoadIncompleteRuns repo/base = %+v, want repo/base %q/%q", inc, want.Repo, want.Base)
+	}
+}
+
 func TestSQLiteLoadIncompleteRuns(t *testing.T) {
 	ctx := context.Background()
 	s := tempDB(t)

@@ -14,6 +14,8 @@ type RunState struct {
 	Status      RunStatus
 	Concurrency int
 	Err         string
+	Repo        string // source repo for external-repo runs; empty = synthetic empty base
+	Base        string // pinned base commit SHA; empty when Repo is empty
 	Steps       []StepState
 }
 

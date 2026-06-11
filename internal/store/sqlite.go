@@ -87,6 +87,8 @@ func (s *SQLite) CreateRun(ctx context.Context, r core.RunState) error {
 		Status:      string(r.Status),
 		Concurrency: int64(r.Concurrency),
 		Error:       r.Err,
+		Repo:        r.Repo,
+		Base:        r.Base,
 	})
 }
 
@@ -135,6 +137,8 @@ func (s *SQLite) GetRun(ctx context.Context, id core.RunID) (core.RunState, erro
 		Status:      core.RunStatus(row.Status),
 		Concurrency: int(row.Concurrency),
 		Err:         row.Error,
+		Repo:        row.Repo,
+		Base:        row.Base,
 		Steps:       steps,
 	}, nil
 }
@@ -268,6 +272,8 @@ func (s *SQLite) LoadIncompleteRuns(ctx context.Context) ([]core.RunState, error
 			Status:      core.RunStatus(r.Status),
 			Concurrency: int(r.Concurrency),
 			Err:         r.Error,
+			Repo:        r.Repo,
+			Base:        r.Base,
 			Steps:       steps,
 		})
 	}

@@ -1,12 +1,12 @@
 -- name: CreateRun :exec
-INSERT INTO runs (id, name, flow_yaml, status, concurrency, error)
-VALUES (?, ?, ?, ?, ?, ?);
+INSERT INTO runs (id, name, flow_yaml, status, concurrency, error, repo, base)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: SetRunStatus :exec
 UPDATE runs SET status = ?, error = ?, updated_at = datetime('now') WHERE id = ?;
 
 -- name: GetRun :one
-SELECT id, name, flow_yaml, status, concurrency, error FROM runs WHERE id = ?;
+SELECT id, name, flow_yaml, status, concurrency, error, repo, base FROM runs WHERE id = ?;
 
 -- name: ListRuns :many
 SELECT id, name, status FROM runs ORDER BY created_at DESC, id;
@@ -15,7 +15,7 @@ SELECT id, name, status FROM runs ORDER BY created_at DESC, id;
 SELECT id, name, status FROM runs WHERE status = ? ORDER BY created_at DESC, id;
 
 -- name: ListIncompleteRuns :many
-SELECT id, name, flow_yaml, status, concurrency, error
+SELECT id, name, flow_yaml, status, concurrency, error, repo, base
 FROM runs WHERE status IN ('pending', 'running') ORDER BY created_at, id;
 
 -- name: UpsertStep :exec

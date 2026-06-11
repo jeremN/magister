@@ -41,7 +41,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid flow: "+err.Error())
 		return
 	}
-	id, err := s.Sup.Submit(r.Context(), f, string(body))
+	id, err := s.Sup.Submit(r.Context(), f, string(body), "", "")
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

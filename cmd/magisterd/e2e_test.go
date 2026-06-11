@@ -201,7 +201,7 @@ func crashDaemonAtGate(t *testing.T, db, flowYAML, stepID string) string {
 	if err := flow.Validate(f); err != nil {
 		t.Fatal(err)
 	}
-	id, err := sup.Submit(context.Background(), f, flowYAML)
+	id, err := sup.Submit(context.Background(), f, flowYAML, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}

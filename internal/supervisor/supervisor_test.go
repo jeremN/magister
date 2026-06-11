@@ -2,6 +2,7 @@ package supervisor
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,11 +17,11 @@ import (
 	"concentus/internal/workspace"
 )
 
-func testEngine(t *testing.T, st core.Store, reg *ApprovalRegistry) *engine.Engine {
+func testEngine(t *testing.T, st core.Store, reg *ApprovalRegistry, ws core.Workspace) *engine.Engine {
 	t.Helper()
 	return &engine.Engine{
 		Execs: map[string]core.Executor{"mock": executor.Mock{Name: "mock"}},
-		WS:    &workspace.Manager{Root: t.TempDir()},
+		WS:    ws,
 		Gate:  &gate.Evaluator{Approver: &RegistryApprover{Reg: reg}, Verifier: gate.CommandVerifier{}},
 		Joins: join.Default(),
 		Store: st, Bus: event.NewBus(), Clock: core.SystemClock{},
@@ -30,12 +31,12 @@ func testEngine(t *testing.T, st core.Store, reg *ApprovalRegistry) *engine.Engi
 func TestSupervisorSubmitRunsToCompletion(t *testing.T) {
 	st := store.NewMem()
 	reg := NewApprovalRegistry()
-	sup := New(testEngine(t, st, reg), st, reg)
+	sup := New(testEngine(t, st, reg, &workspace.Manager{Root: t.TempDir()}), st, reg)
 
 	f := &flow.Flow{Name: "f", Steps: []*flow.Step{
 		{ID: "a", Agent: "mock", Gate: flow.Gate{Policy: flow.GateManual}},
 	}}
-	id, err := sup.Submit(context.Background(), f, "name: f\n")
+	id, err := sup.Submit(context.Background(), f, "name: f\n", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,11 +53,11 @@ func TestSupervisorSubmitRunsToCompletion(t *testing.T) {
 func TestSupervisorCancelStopsRun(t *testing.T) {
 	st := store.NewMem()
 	reg := NewApprovalRegistry()
-	sup := New(testEngine(t, st, reg), st, reg)
+	sup := New(testEngine(t, st, reg, &workspace.Manager{Root: t.TempDir()}), st, reg)
 	f := &flow.Flow{Name: "f", Steps: []*flow.Step{
 		{ID: "a", Agent: "mock", Gate: flow.Gate{Policy: flow.GateManual}},
 	}}
-	id, _ := sup.Submit(context.Background(), f, "x")
+	id, _ := sup.Submit(context.Background(), f, "x", "", "")
 	// the gate is blocking; cancel the run
 	waitFor(t, func() bool { return sup.Cancel(id) })
 	waitForStatus(t, st, id, core.RunCanceled)
@@ -79,7 +80,7 @@ func TestResetIncompleteStepsToPending(t *testing.T) {
 	ctx := context.Background()
 	st := store.NewMem()
 	reg := NewApprovalRegistry()
-	sup := New(testEngine(t, st, reg), st, reg)
+	sup := New(testEngine(t, st, reg, &workspace.Manager{Root: t.TempDir()}), st, reg)
 
 	if err := st.CreateRun(ctx, core.RunState{ID: "r1", Name: "f", Status: core.RunRunning}); err != nil {
 		t.Fatal(err)
@@ -112,7 +113,7 @@ func TestResumeAllContinuesPastCorruptFlow(t *testing.T) {
 	ctx := context.Background()
 	st := store.NewMem()
 	reg := NewApprovalRegistry()
-	sup := New(testEngine(t, st, reg), st, reg)
+	sup := New(testEngine(t, st, reg, &workspace.Manager{Root: t.TempDir()}), st, reg)
 
 	// r1: unparseable flow YAML. r2: a valid flow with a manual gate (will block).
 	if err := st.CreateRun(ctx, core.RunState{ID: "r1", Name: "bad", FlowYAML: "::: not yaml :::", Status: core.RunRunning}); err != nil {
@@ -131,4 +132,75 @@ func TestResumeAllContinuesPastCorruptFlow(t *testing.T) {
 	waitFor(t, func() bool { return sup.Approve("r2", "a", true, "") })
 	waitForStatus(t, st, "r2", core.RunSucceeded)
 	sup.Shutdown(time.Second)
+}
+
+// provisionSpy records Provision calls while delegating the rest to a real Manager.
+type provisionSpy struct {
+	*workspace.Manager
+	mu  sync.Mutex
+	got []string // "repo|base" per call
+}
+
+func (p *provisionSpy) Provision(id core.RunID, repo, base string) error {
+	p.mu.Lock()
+	p.got = append(p.got, repo+"|"+base)
+	p.mu.Unlock()
+	return nil
+}
+
+// autoStepYAML is a one-step flow with an auto gate, so the run completes without approval.
+const autoStepYAML = "name: f\nsteps:\n  - id: a\n    agent: mock\n    gate: { policy: auto, verifier: { command: \"true\" } }\n"
+
+func TestSubmitProvisionsAndPersistsRepoBase(t *testing.T) {
+	st := store.NewMem()
+	reg := NewApprovalRegistry()
+	spy := &provisionSpy{Manager: &workspace.Manager{Root: t.TempDir()}}
+	sup := New(testEngine(t, st, reg, spy), st, reg)
+	t.Cleanup(func() { sup.Shutdown(time.Second) })
+
+	f := &flow.Flow{Name: "f", Steps: []*flow.Step{
+		{ID: "a", Agent: "mock", Gate: flow.Gate{Policy: flow.GateAuto, Verifier: &flow.Verifier{Command: "true"}}},
+	}}
+	id, err := sup.Submit(context.Background(), f, autoStepYAML, "/abs/proj", "deadbeef")
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	waitForStatus(t, st, id, core.RunSucceeded)
+
+	rs, err := st.GetRun(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rs.Repo != "/abs/proj" || rs.Base != "deadbeef" {
+		t.Errorf("persisted repo/base = %q/%q, want %q/%q", rs.Repo, rs.Base, "/abs/proj", "deadbeef")
+	}
+	spy.mu.Lock()
+	defer spy.mu.Unlock()
+	if len(spy.got) != 1 || spy.got[0] != "/abs/proj|deadbeef" {
+		t.Errorf("Provision calls = %v, want [/abs/proj|deadbeef]", spy.got)
+	}
+}
+
+func TestResumeAllProvisions(t *testing.T) {
+	st := store.NewMem()
+	reg := NewApprovalRegistry()
+	spy := &provisionSpy{Manager: &workspace.Manager{Root: t.TempDir()}}
+	sup := New(testEngine(t, st, reg, spy), st, reg)
+	t.Cleanup(func() { sup.Shutdown(time.Second) })
+
+	// Seed an incomplete run carrying repo/base, as if persisted before a crash.
+	if err := st.CreateRun(context.Background(), core.RunState{
+		ID: "r1", Name: "f", FlowYAML: autoStepYAML, Status: core.RunRunning,
+		Repo: "/abs/proj", Base: "deadbeef",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := sup.ResumeAll(context.Background()); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	spy.mu.Lock()
+	defer spy.mu.Unlock()
+	if len(spy.got) != 1 || spy.got[0] != "/abs/proj|deadbeef" {
+		t.Errorf("Provision calls on resume = %v, want [/abs/proj|deadbeef]", spy.got)
+	}
 }

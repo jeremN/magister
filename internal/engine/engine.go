@@ -41,6 +41,13 @@ type Engine struct {
 	Log  *slog.Logger // non-fatal store/bus failures; nil = discard (M3 wires a real handler)
 }
 
+// Provision records a run's source repo + pinned base SHA with the workspace
+// before the run starts (see core.Workspace.Provision). Empty repo selects the
+// synthetic empty-base scratch repo (default; today's behavior).
+func (e *Engine) Provision(runID core.RunID, repo, base string) error {
+	return e.WS.Provision(runID, repo, base)
+}
+
 // Run executes one flow to completion from scratch. The run row must already
 // exist in the store (the caller creates it); Run drives its status and all step
 // transitions. The first failing step cancels the run's context; the rest unwind.

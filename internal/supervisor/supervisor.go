@@ -41,14 +41,19 @@ func New(eng *engine.Engine, store core.Store, reg *ApprovalRegistry) *Superviso
 // NewRunID returns a fresh sortable run ID.
 func NewRunID() core.RunID { return core.RunID(ulid.Make().String()) }
 
-// Submit persists a pending run and starts it. Validating the flow is the
+// Submit persists a pending run, provisions its workspace (repo+base; empty repo
+// = synthetic base), and starts it. Validating the flow and the repo/base is the
 // caller's job (the API handler does it before calling Submit).
-func (s *Supervisor) Submit(ctx context.Context, f *flow.Flow, flowYAML string) (core.RunID, error) {
+func (s *Supervisor) Submit(ctx context.Context, f *flow.Flow, flowYAML, repo, base string) (core.RunID, error) {
 	id := NewRunID()
 	if err := s.store.CreateRun(ctx, core.RunState{
-		ID: id, Name: f.Name, FlowYAML: flowYAML, Status: core.RunPending, Concurrency: f.Concurrency,
+		ID: id, Name: f.Name, FlowYAML: flowYAML, Status: core.RunPending,
+		Concurrency: f.Concurrency, Repo: repo, Base: base,
 	}); err != nil {
 		return "", fmt.Errorf("create run: %w", err)
+	}
+	if err := s.engine.Provision(id, repo, base); err != nil {
+		return "", fmt.Errorf("provision run: %w", err)
 	}
 	s.start(id, func(runCtx context.Context) error { return s.engine.Run(runCtx, id, f) })
 	return id, nil
@@ -139,6 +144,10 @@ func (s *Supervisor) ResumeAll(ctx context.Context) error {
 		}
 		s.resetIncompleteSteps(ctx, rs)
 		rs := rs
+		if err := s.engine.Provision(rs.ID, rs.Repo, rs.Base); err != nil {
+			s.logger().Error("resume: provision run", "run", rs.ID, "err", err)
+			continue
+		}
 		s.start(rs.ID, func(runCtx context.Context) error { return s.engine.Resume(runCtx, rs, f) })
 	}
 	return nil

@@ -1,0 +1,29 @@
+name: external-repo
+concurrency: 2
+
+# External-repo demo: run with `cm run flows/external-repo.yaml --repo <abs-repo> --base <ref>`.
+# The per-run scratch repo is a read-only CLONE of <repo> at <ref>; the two isolated
+# upstreams commit branches that fork from that real base, and the `merge` join does a
+# real git merge over it. Runs zero-cost with `mock` (writes a unique <id>.out.md per step).
+# Join + all its upstreams must be workspace: isolated; auto gates keep it non-blocking.
+steps:
+  - id: build-api
+    agent: mock
+    role: implementer
+    workspace: isolated
+    prompt: "build the api"
+    gate: { policy: auto, verifier: { command: "true" } }
+
+  - id: build-ui
+    agent: mock
+    role: implementer
+    workspace: isolated
+    prompt: "build the ui"
+    gate: { policy: auto, verifier: { command: "true" } }
+
+  - id: integrate
+    needs: [build-api, build-ui]
+    workspace: isolated
+    join:
+      strategy: merge
+    gate: { policy: auto, verifier: { command: "true" } }

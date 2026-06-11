@@ -82,6 +82,16 @@ The `merge` join now does a **real `git merge`** of its upstream branches (no lo
 
 Zero-cost runnable demo: **`flows/git-native-merge.yaml`** (two isolated `mock` upstreams → `merge` join). Expected SSE: `run.started → step.started×2 → step.done×2 → step.started(integrate) → step.done "merged 2 branch(es)" → run.done`. Confirm a *real* merge (not a manifest): `cm get <run>` shows `integrate`'s artifacts are the merged files of both upstreams, and `git -C <runs>/<run>/base log --graph --all` shows `step/integrate` as a 2-parent merge commit.
 
+## External repo (run against a real git repo)
+
+By default the per-run scratch repo is a synthetic empty base. To run a flow against a **real, pre-existing git repo**, pass `--repo` (and optionally `--base`) at submit:
+
+```
+cm run flows/external-repo.yaml --repo /abs/path/to/repo --base main
+```
+
+The daemon **clones** `<repo>` read-only into the per-run scratch (it never writes the source), checks out the pinned base commit, and `step/<id>` branches fork from there — so joins produce real, mergeable history over real code. `--base` defaults to the source repo's `HEAD`; it is validated and pinned to a concrete SHA at submit (a bad repo path or unresolvable ref → `400`). The result lives in the scratch clone: `cm get <run>` surfaces its path as the `scratch` field (`<runs>/<run>/base`). Inspect with `git -C <scratch> log --graph --all` — `step/integrate` will be a 2-parent merge commit whose tree contains the cloned base's files **plus** each upstream's work. (Pushing the result back / opening a PR is a later slice.) Zero-cost demo: **`flows/external-repo.yaml`** (same shape as the git-native merge demo; the flow stays repo-agnostic — provisioning comes from `--repo`/`--base`, not the YAML).
+
 ## Gotchas (each cost real time to learn)
 
 - **`flows/feature-flow.yaml` does NOT run standalone.** It references the unregistered `gemini` agent, `manual` gates (would block on `cm approve`), and pricey `opus`. (Its `integrate` step is now a valid git-native `merge`+`escalate` join — isolated, with a `join.agent` — but the surrounding agents still make it a poor quick smoke.) Use `flows/git-native-merge.yaml` for a mock merge smoke, or write a minimal flow as above.
@@ -92,4 +102,4 @@ Zero-cost runnable demo: **`flows/git-native-merge.yaml`** (two isolated `mock` 
 
 ## cm command surface
 
-`cm run <flow.yaml> [--watch]` · `cm ls` · `cm get <run>` · `cm watch <run>` · `cm approve|reject <run> <step> [reason]` · `cm cancel <run>`. All target `$MAGISTER_ADDR`.
+`cm run <flow.yaml> [--repo <abs-path>] [--base <ref>] [--watch]` · `cm ls` · `cm get <run>` · `cm watch <run>` · `cm approve|reject <run> <step> [reason]` · `cm cancel <run>`. All target `$MAGISTER_ADDR`. `--repo`/`--base` run the flow against a real git repo (see *External repo* above).

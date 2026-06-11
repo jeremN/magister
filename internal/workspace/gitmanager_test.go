@@ -214,4 +214,109 @@ func TestGitManagerCommitAllowsEmpty(t *testing.T) {
 	}
 }
 
+// setupSourceRepo builds a committed fixture repo and returns its dir + HEAD sha.
+func setupSourceRepo(t *testing.T) (string, string) {
+	t.Helper()
+	src := t.TempDir()
+	gitOut(t, src, "init")
+	gitOut(t, src, "config", "user.name", "fix")
+	gitOut(t, src, "config", "user.email", "fix@example.com")
+	if err := os.WriteFile(filepath.Join(src, "hello.txt"), []byte("base content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitOut(t, src, "add", "-A")
+	gitOut(t, src, "commit", "-m", "base")
+	return src, gitOut(t, src, "rev-parse", "HEAD")
+}
+
+func TestGitManagerProvisionClonesRealRepo(t *testing.T) {
+	requireGit(t)
+	src, sha := setupSourceRepo(t)
+
+	m := &GitManager{Root: t.TempDir()}
+	if err := m.Provision("r1", src, sha); err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	wt, _, err := m.For("r1", &flow.Step{ID: "build", Workspace: flow.WSIsolated})
+	if err != nil {
+		t.Fatalf("For: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(wt, "hello.txt"))
+	if err != nil {
+		t.Fatalf("base file missing in worktree (clone did not fork from base): %v", err)
+	}
+	if string(got) != "base content\n" {
+		t.Errorf("base content = %q, want %q", got, "base content\n")
+	}
+	// The step branch forks from the cloned base, so its parent is the base sha.
+	if parent := gitOut(t, wt, "rev-parse", "HEAD"); parent != sha {
+		t.Errorf("worktree HEAD = %q, want pinned base %q", parent, sha)
+	}
+}
+
+func TestIsHexSHA(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{"", false},
+		{"abc123", false}, // too short (6)
+		{"abc1234", true}, // min length (7)
+		{"0123456789abcdef0123456789abcdef01234567", true},                           // full sha-1 (40)
+		{"DEADBEEFdeadbeef", true},                                                   // mixed case
+		{"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", true},   // 64 (sha-256)
+		{"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0", false}, // 65, too long
+		{"--upload-pack=x", false},                                                   // flag-like
+		{"main", false},                                                              // ref name
+		{"ghijklm", false},                                                           // non-hex letters
+	}
+	for _, c := range cases {
+		if got := isHexSHA(c.in); got != c.want {
+			t.Errorf("isHexSHA(%q) = %v, want %v", c.in, got, c.want)
+		}
+	}
+}
+
+func TestGitManagerProvisionRejectsFlaglikeBase(t *testing.T) {
+	requireGit(t)
+	src, _ := setupSourceRepo(t)
+	m := &GitManager{Root: t.TempDir()}
+	// A non-hex, "-"-leading base must be rejected before it reaches git, so it
+	// cannot smuggle a flag (e.g. --upload-pack=...) into `checkout`.
+	if err := m.Provision("r1", src, "--upload-pack=touch pwned"); err != nil {
+		t.Fatalf("provision records the spec, should not error: %v", err)
+	}
+	if _, _, err := m.For("r1", &flow.Step{ID: "build", Workspace: flow.WSIsolated}); err == nil {
+		t.Fatal("For should reject a non-hex/flag-like base")
+	}
+}
+
+func TestGitManagerNoRepoUsesEmptyBase(t *testing.T) {
+	requireGit(t)
+	m := &GitManager{Root: t.TempDir()}
+	// No Provision at all => synthetic empty base (today's behavior).
+	wt, _, err := m.For("r1", &flow.Step{ID: "build", Workspace: flow.WSIsolated})
+	if err != nil {
+		t.Fatalf("For: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(wt, "hello.txt")); !os.IsNotExist(err) {
+		t.Fatalf("expected empty base, found a stray file (stat err=%v)", err)
+	}
+}
+
+func TestGitManagerProvisionEmptyRepoUsesEmptyBase(t *testing.T) {
+	requireGit(t)
+	m := &GitManager{Root: t.TempDir()}
+	if err := m.Provision("r1", "", ""); err != nil {
+		t.Fatalf("provision empty: %v", err)
+	}
+	wt, _, err := m.For("r1", &flow.Step{ID: "build", Workspace: flow.WSIsolated})
+	if err != nil {
+		t.Fatalf("For: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(wt, "hello.txt")); !os.IsNotExist(err) {
+		t.Fatalf("empty repo should select the empty base, found a stray file (stat err=%v)", err)
+	}
+}
+
 var _ core.Workspace = (*GitManager)(nil)

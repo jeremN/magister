@@ -25,6 +25,10 @@ func (m *Manager) Commit(core.RunID, *flow.Step, string) (string, string, error)
 	return "", "", nil
 }
 
+// Provision is a no-op: the plain Manager has no git backing, so there is no repo
+// to clone. External-repo runs require the GitManager.
+func (m *Manager) Provision(core.RunID, string, string) error { return nil }
+
 func (m *Manager) For(runID core.RunID, s *flow.Step) (string, func() error, error) {
 	dir := filepath.Join(m.Root, string(runID))
 	if s.Workspace == flow.WSIsolated {

@@ -57,6 +57,10 @@ type Workspace interface {
 	// no git backing (the plain Manager) and acceptable to call for any step; the
 	// engine only calls it for committed isolated steps.
 	Commit(runID RunID, s *flow.Step, workDir string) (branch, commit string, err error)
+	// Provision records the run's source repo + pinned base commit SHA before any
+	// step runs. An empty repo selects the synthetic empty-base scratch repo
+	// (default; today's behavior). A no-op for the plain Manager (no git backing).
+	Provision(runID RunID, repo, base string) error
 	// TeardownRun removes the run's isolated worktrees (the base repo persists). It
 	// is best-effort, idempotent, and a no-op for a run with no worktrees.
 	TeardownRun(runID RunID) error

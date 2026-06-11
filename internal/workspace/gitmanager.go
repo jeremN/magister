@@ -26,6 +26,17 @@ type GitManager struct {
 	// are intentionally NOT pruned at teardown: the per-run footprint is a few bytes,
 	// and pruning would risk a late For racing a teardown-time delete.
 	locks map[core.RunID]*sync.Mutex
+	// specs holds each run's provisioning request (set by Provision). Guarded by
+	// mu, like locks. Absent/zero spec ⇒ synthetic empty base.
+	specs map[core.RunID]repoSpec
+}
+
+// repoSpec is a run's external-repo provisioning request: the source repo to
+// clone and the pinned base commit SHA to check out. The zero value (empty repo)
+// selects the synthetic empty-base scratch repo.
+type repoSpec struct {
+	repo string
+	base string
 }
 
 func (m *GitManager) name() string {
@@ -56,6 +67,25 @@ func (m *GitManager) runLock(id core.RunID) *sync.Mutex {
 	return l
 }
 
+// Provision records a run's source repo + pinned base SHA before its first step.
+// Empty repo ⇒ synthetic empty base. Re-provisioning a run overwrites its spec
+// (last write wins) — intended, so a resume can re-record the same run's repo/base.
+func (m *GitManager) Provision(runID core.RunID, repo, base string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.specs == nil {
+		m.specs = make(map[core.RunID]repoSpec)
+	}
+	m.specs[runID] = repoSpec{repo: repo, base: base}
+	return nil
+}
+
+func (m *GitManager) specFor(runID core.RunID) repoSpec {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.specs[runID] // zero value (empty repo) if never provisioned
+}
+
 func (m *GitManager) baseDir(id core.RunID) string { return filepath.Join(m.Root, string(id), "base") }
 func (m *GitManager) wtDir(id core.RunID) string   { return filepath.Join(m.Root, string(id), "wt") }
 
@@ -73,34 +103,91 @@ func (m *GitManager) run(dir string, args ...string) ([]byte, error) {
 	return out, nil
 }
 
-// ensureRepo lazily inits the per-run base repo with one empty commit. Idempotent,
-// and self-healing: a crash between `git init` and the first commit leaves an unborn
-// HEAD, which would wedge every later `worktree add ... HEAD`; re-issuing the empty
-// commit heals it. The guard on rev-parse HEAD avoids stacking commits on a healthy repo.
-func (m *GitManager) ensureRepo(base string) error {
-	if _, err := os.Stat(filepath.Join(base, ".git")); err != nil {
-		if err := os.MkdirAll(base, 0o755); err != nil {
+// ensureRepo lazily provisions the per-run base repo. With a spec.repo set it
+// clones the source at the pinned base SHA; otherwise it inits an empty base
+// with one empty commit. Idempotent and self-healing: a present .git is reused
+// (resume), and a crash between `git init` and the first commit (unborn HEAD) is
+// healed by re-issuing the empty commit. A clone is born with a real HEAD, so the
+// heal applies only to the empty-base path.
+func (m *GitManager) ensureRepo(baseDir string, spec repoSpec) error {
+	if _, err := os.Stat(filepath.Join(baseDir, ".git")); err != nil {
+		if err := os.MkdirAll(baseDir, 0o755); err != nil {
 			return err
 		}
-		if _, err := m.run(base, "init"); err != nil {
+		if spec.repo != "" {
+			return m.cloneBase(baseDir, spec)
+		}
+		if _, err := m.run(baseDir, "init"); err != nil {
 			return err
 		}
-		if _, err := m.run(base, "config", "user.name", m.name()); err != nil {
+		if _, err := m.run(baseDir, "config", "user.name", m.name()); err != nil {
 			return err
 		}
-		if _, err := m.run(base, "config", "user.email", m.email()); err != nil {
+		if _, err := m.run(baseDir, "config", "user.email", m.email()); err != nil {
 			return err
 		}
 	}
-	if _, err := m.run(base, "rev-parse", "--verify", "-q", "HEAD"); err == nil {
+	if spec.repo != "" {
+		return nil // a clone is born with a real HEAD; nothing to heal
+	}
+	if _, err := m.run(baseDir, "rev-parse", "--verify", "-q", "HEAD"); err == nil {
 		return nil // base commit already present
 	}
-	if _, err := m.run(base,
+	if _, err := m.run(baseDir,
 		"-c", "user.name="+m.name(), "-c", "user.email="+m.email(),
 		"commit", "--allow-empty", "-m", "base"); err != nil {
 		return err
 	}
 	return nil
+}
+
+// cloneBase clones the source repo into baseDir and detaches HEAD at the pinned
+// base SHA, so step worktrees fork from that exact commit. The source is read
+// only (clone only reads it). Identity is set after clone — a clone does not copy
+// the source's local user.name/user.email, which merge commits need.
+//
+// Argv hardening (defense in depth — the API layer also validates at submit):
+//   - base must be a hex commit SHA (it is always a pinned SHA), so it cannot be a
+//     "-"-leading flag smuggled into `checkout`.
+//   - `--` separates clone options from the <repo> <dir> positionals, so a
+//     "-"-leading repo cannot smuggle a flag.
+//   - protocol.ext.allow=never disables the ext:: transport (a remote-code vector
+//     if repo were attacker-controlled); local file clones are unaffected.
+func (m *GitManager) cloneBase(baseDir string, spec repoSpec) error {
+	if !isHexSHA(spec.base) {
+		return fmt.Errorf("invalid base commit %q: want a hex sha", spec.base)
+	}
+	if _, err := m.run("", "-c", "protocol.ext.allow=never", "clone", "--", spec.repo, baseDir); err != nil {
+		return err
+	}
+	if _, err := m.run(baseDir, "checkout", "--detach", spec.base); err != nil {
+		// A clone that can't reach its pinned base must not be left half-provisioned:
+		// the .git dir would make a later ensureRepo treat it as ready and silently
+		// fork from the wrong commit. Remove it so the next attempt re-clones.
+		_ = os.RemoveAll(baseDir)
+		return err
+	}
+	if _, err := m.run(baseDir, "config", "user.name", m.name()); err != nil {
+		return err
+	}
+	if _, err := m.run(baseDir, "config", "user.email", m.email()); err != nil {
+		return err
+	}
+	return nil
+}
+
+// isHexSHA reports whether s is a plausible git commit SHA: 7–64 hex digits. A hex
+// string cannot begin with "-", which is what makes it safe as a positional git arg.
+func isHexSHA(s string) bool {
+	if len(s) < 7 || len(s) > 64 {
+		return false
+	}
+	for _, c := range s {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
 }
 
 // freshWorktree (re-)creates a clean worktree at wt on branch step/<stepID>. Any
@@ -127,7 +214,7 @@ func (m *GitManager) For(runID core.RunID, s *flow.Step) (string, func() error, 
 	defer lock.Unlock()
 
 	base := m.baseDir(runID)
-	if err := m.ensureRepo(base); err != nil {
+	if err := m.ensureRepo(base, m.specFor(runID)); err != nil {
 		return "", nil, err
 	}
 	noop := func() error { return nil } // worktrees outlive the step; TeardownRun reclaims them

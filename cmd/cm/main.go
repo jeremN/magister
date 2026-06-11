@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"time"
 )
@@ -73,16 +74,31 @@ type client struct {
 
 func (c *client) run(args []string, out io.Writer) int {
 	watch := false
-	var path string
-	for _, a := range args {
-		if a == "--watch" {
+	var path, repo, base string
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--watch":
 			watch = true
-		} else {
-			path = a
+		case "--repo":
+			i++
+			if i >= len(args) {
+				fmt.Fprintln(out, "usage: --repo requires a value")
+				return 2
+			}
+			repo = args[i]
+		case "--base":
+			i++
+			if i >= len(args) {
+				fmt.Fprintln(out, "usage: --base requires a value")
+				return 2
+			}
+			base = args[i]
+		default:
+			path = args[i]
 		}
 	}
 	if path == "" {
-		fmt.Fprintln(out, "usage: cm run <flow.yaml> [--watch]")
+		fmt.Fprintln(out, "usage: cm run <flow.yaml> [--repo <path>] [--base <ref>] [--watch]")
 		return 2
 	}
 	body, err := os.ReadFile(path)
@@ -90,7 +106,16 @@ func (c *client) run(args []string, out io.Writer) int {
 		fmt.Fprintln(out, "read flow:", err)
 		return 1
 	}
-	resp, err := c.http.Post(c.base+"/v1/runs", "application/x-yaml", bytes.NewReader(body))
+	endpoint := c.base + "/v1/runs"
+	if repo != "" {
+		q := url.Values{}
+		q.Set("repo", repo)
+		if base != "" {
+			q.Set("base", base)
+		}
+		endpoint += "?" + q.Encode()
+	}
+	resp, err := c.http.Post(endpoint, "application/x-yaml", bytes.NewReader(body))
 	if err != nil {
 		fmt.Fprintln(out, "submit:", err)
 		return 1

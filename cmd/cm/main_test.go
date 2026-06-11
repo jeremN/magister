@@ -72,6 +72,27 @@ func TestUnknownCommandExitsNonZero(t *testing.T) {
 	}
 }
 
+func TestRunPassesRepoBaseAsQuery(t *testing.T) {
+	var got http.Request
+	srv := fakeAPI(t, http.StatusCreated, `{"id":"r1"}`, &got)
+	defer srv.Close()
+
+	flowPath := t.TempDir() + "/f.yaml"
+	if err := os.WriteFile(flowPath, []byte("name: f\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	code := dispatch([]string{"run", flowPath, "--repo", "/abs/proj", "--base", "main"}, srv.URL, &out)
+	if code != 0 {
+		t.Fatalf("exit = %d, out=%s", code, out.String())
+	}
+	if got.URL.Query().Get("repo") != "/abs/proj" || got.URL.Query().Get("base") != "main" {
+		t.Errorf("query repo=%q base=%q, want repo=/abs/proj base=main",
+			got.URL.Query().Get("repo"), got.URL.Query().Get("base"))
+	}
+}
+
 func TestApproveRetriesOn409(t *testing.T) {
 	var calls int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

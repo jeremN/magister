@@ -85,6 +85,12 @@ func (m *GitManager) ensureRepo(base string) error {
 		if _, err := m.run(base, "init"); err != nil {
 			return err
 		}
+		if _, err := m.run(base, "config", "user.name", m.name()); err != nil {
+			return err
+		}
+		if _, err := m.run(base, "config", "user.email", m.email()); err != nil {
+			return err
+		}
 	}
 	if _, err := m.run(base, "rev-parse", "--verify", "-q", "HEAD"); err == nil {
 		return nil // base commit already present
@@ -134,6 +140,28 @@ func (m *GitManager) For(runID core.RunID, s *flow.Step) (string, func() error, 
 		return "", nil, err
 	}
 	return wt, noop, nil
+}
+
+// Commit stages and commits everything in the step's worktree onto its branch,
+// returning the branch name and the new commit sha. --allow-empty so a step that
+// wrote nothing still advances its branch deterministically. Serialised by the
+// run lock, like For/TeardownRun. Identity comes from the repo config ensureRepo set.
+func (m *GitManager) Commit(runID core.RunID, s *flow.Step, workDir string) (string, string, error) {
+	lock := m.runLock(runID)
+	lock.Lock()
+	defer lock.Unlock()
+
+	if _, err := m.run(workDir, "add", "-A"); err != nil {
+		return "", "", err
+	}
+	if _, err := m.run(workDir, "commit", "--allow-empty", "-m", "step/"+s.ID); err != nil {
+		return "", "", err
+	}
+	out, err := m.run(workDir, "rev-parse", "HEAD")
+	if err != nil {
+		return "", "", err
+	}
+	return "step/" + s.ID, string(bytes.TrimSpace(out)), nil
 }
 
 // TeardownRun removes the run's isolated worktrees (the base repo persists). Best-

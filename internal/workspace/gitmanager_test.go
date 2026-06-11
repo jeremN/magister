@@ -177,4 +177,41 @@ func TestGitManagerTeardownRemovesAllWorktrees(t *testing.T) {
 	}
 }
 
+func TestGitManagerCommitRecordsWork(t *testing.T) {
+	requireGit(t)
+	m := &GitManager{Root: t.TempDir()}
+	dir, _, err := m.For("r1", &flow.Step{ID: "a", Workspace: flow.WSIsolated})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "out.txt"), []byte("work"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	branch, commit, err := m.Commit("r1", &flow.Step{ID: "a", Workspace: flow.WSIsolated}, dir)
+	if err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	if branch != "step/a" {
+		t.Errorf("branch = %q, want step/a", branch)
+	}
+	if commit == "" || commit != gitOut(t, dir, "rev-parse", "HEAD") {
+		t.Errorf("commit sha = %q, want HEAD", commit)
+	}
+	if status := gitOut(t, dir, "status", "--porcelain"); status != "" {
+		t.Errorf("worktree should be clean after commit, got %q", status)
+	}
+}
+
+func TestGitManagerCommitAllowsEmpty(t *testing.T) {
+	requireGit(t)
+	m := &GitManager{Root: t.TempDir()}
+	dir, _, err := m.For("r1", &flow.Step{ID: "a", Workspace: flow.WSIsolated})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, commit, err := m.Commit("r1", &flow.Step{ID: "a", Workspace: flow.WSIsolated}, dir); err != nil || commit == "" {
+		t.Fatalf("commit of a no-file step should still produce a commit, got commit=%q err=%v", commit, err)
+	}
+}
+
 var _ core.Workspace = (*GitManager)(nil)

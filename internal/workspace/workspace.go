@@ -20,6 +20,11 @@ type Manager struct {
 // caller's run dir cleanup (or the OS temp dir) reclaims. GitManager does real teardown.
 func (m *Manager) TeardownRun(core.RunID) error { return nil }
 
+// Commit is a no-op: the plain Manager has no git backing, so steps stay path-only.
+func (m *Manager) Commit(core.RunID, *flow.Step, string) (string, string, error) {
+	return "", "", nil
+}
+
 func (m *Manager) For(runID core.RunID, s *flow.Step) (string, func() error, error) {
 	dir := filepath.Join(m.Root, string(runID))
 	if s.Workspace == flow.WSIsolated {

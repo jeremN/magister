@@ -52,6 +52,11 @@ type Executor interface {
 // run's isolated worktrees when the run ends.
 type Workspace interface {
 	For(runID RunID, s *flow.Step) (dir string, cleanup func() error, err error)
+	// Commit records the step's worktree as a commit on its branch and returns the
+	// branch name and commit sha. A no-op (returns "", "", nil) for workspaces with
+	// no git backing (the plain Manager) and acceptable to call for any step; the
+	// engine only calls it for committed isolated steps.
+	Commit(runID RunID, s *flow.Step, workDir string) (branch, commit string, err error)
 	// TeardownRun removes the run's isolated worktrees (the base repo persists). It
 	// is best-effort, idempotent, and a no-op for a run with no worktrees.
 	TeardownRun(runID RunID) error

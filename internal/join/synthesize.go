@@ -33,20 +33,13 @@ func (Synthesize) Join(ctx context.Context, s *flow.Step, inputs []core.Artifact
 			return core.Result{}, fmt.Errorf("synthesize: arbiter failed: %w", aerr)
 		}
 		cost += ares.CostUSD
-		// Stage the arbiter's writes, then scan the staged content for leftover
-		// conflict markers. The unmerged index is checked via the *staged* tree
-		// (conflictedPaths is index-state-based, so it would still report the path
-		// until `git add`). Whitespace rules are disabled so only genuine conflict
-		// markers fail the check — not trailing whitespace an arbiter may emit.
-		if _, err := gitCmd(workDir, "add", "-A"); err != nil {
+		// Stage the arbiter's writes and confirm no conflict markers remain before
+		// concluding the merge. (conflictedPaths is index-state-based, so it can't
+		// recheck a working-tree resolution until `git add`; EnsureResolved stages
+		// then scans the staged tree.)
+		if err := EnsureResolved(workDir); err != nil {
 			_, _ = gitCmd(workDir, "merge", "--abort")
-			return core.Result{}, fmt.Errorf("synthesize: stage resolution of %s: %w", br, err)
-		}
-		if _, err := gitCmd(workDir,
-			"-c", "core.whitespace=-trailing-space,-blank-at-eol,-space-before-tab,-blank-at-eof",
-			"diff", "--cached", "--check"); err != nil {
-			_, _ = gitCmd(workDir, "merge", "--abort")
-			return core.Result{}, fmt.Errorf("synthesize: arbiter left unresolved conflicts in %v", conflicted)
+			return core.Result{}, fmt.Errorf("synthesize: arbiter left conflicts in %v: %w", conflicted, err)
 		}
 		if _, err := gitCmd(workDir, "commit", "--no-edit"); err != nil {
 			return core.Result{}, fmt.Errorf("synthesize: commit after resolving %s: %w", br, err)

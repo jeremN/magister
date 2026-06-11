@@ -6,6 +6,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -500,11 +501,16 @@ func (e *Engine) escalate(ctx context.Context, runID core.RunID, s *flow.Step, r
 	return res, nil
 }
 
-// escalateJoin handles a failed join with on_conflict=escalate. Unlike a gate
-// escalate (which approves an existing result), a failed join has no result, so
-// approval RE-RUNS the join exactly once: approve -> one fresh attempt; reject ->
-// abort. The failure reason rides on the gate.awaiting event's Err.
+// escalateJoin handles a failed join with on_conflict=escalate. A merge conflict
+// (a *join.ConflictError) takes the resolveConflictEscalation ladder below. For any
+// other join failure (e.g. an arbiter error) there is no result, so approval
+// RE-RUNS the join exactly once: approve -> one fresh attempt; reject -> abort. The
+// failure reason rides on the gate.awaiting event's Err.
 func (e *Engine) escalateJoin(ctx context.Context, runID core.RunID, s *flow.Step, inputs []core.Artifact, workDir string, joinErr error, attemptNum int) (core.Result, error) {
+	var conflict *join.ConflictError
+	if errors.As(joinErr, &conflict) {
+		return e.resolveConflictEscalation(ctx, runID, s, inputs, workDir, conflict, attemptNum)
+	}
 	e.transition(ctx, runID, stepState(runID, s.ID, core.StepAwaitingGate, attemptNum, workDir, core.Result{}, joinErr),
 		event.Event{StepID: s.ID, Kind: event.GateAwaiting, Attempt: attemptNum, Err: joinErr.Error()})
 
@@ -530,6 +536,69 @@ func (e *Engine) escalateJoin(ctx context.Context, runID core.RunID, s *flow.Ste
 	}
 	e.transition(ctx, runID, stepState(runID, s.ID, core.StepSucceeded, attemptNum+1, workDir, res, nil),
 		event.Event{StepID: s.ID, Kind: event.StepDone, Summary: res.Summary, CostUSD: res.CostUSD, Attempt: attemptNum + 1})
+	return res, nil
+}
+
+// resolveConflictEscalation runs the merge-conflict ladder: the arbiter resolves
+// the markers in the conflicted worktree (rung 1), then a human approves the
+// resolution (rung 2). Approve commits the resolved tree (concluding the in-progress
+// merge) as the result; reject fails (the worktree is reclaimed at run-end). The
+// conflicted worktree arrives mid-merge (MERGE_HEAD set) and is resolved in place —
+// it is never aborted or re-merged.
+func (e *Engine) resolveConflictEscalation(ctx context.Context, runID core.RunID, s *flow.Step, inputs []core.Artifact, workDir string, conflict *join.ConflictError, attemptNum int) (core.Result, error) {
+	next := attemptNum + 1
+	// Frame the resolution as a fresh attempt (also closes the missing-step.started gap).
+	e.transition(ctx, runID, stepState(runID, s.ID, core.StepRunning, next, workDir, core.Result{}, nil),
+		event.Event{StepID: s.ID, Kind: event.StepStarted, Attempt: next})
+
+	// Rung 1: arbiter resolves the conflict markers in place.
+	ares, err := e.runAgent(ctx, runID, s.ID, "arbiter", s.Join.Agent, join.ResolveConflictPrompt(conflict.Paths), workDir, next, inputs)
+	if err != nil {
+		e.transition(ctx, runID, stepState(runID, s.ID, core.StepFailed, next, workDir, core.Result{}, err),
+			event.Event{StepID: s.ID, Kind: event.StepFailed, Attempt: next, Err: err.Error()})
+		return core.Result{}, err
+	}
+	// A botched resolution (markers still present) fails before the human reviews it,
+	// so we never ask for approval of — or commit — an unresolved merge.
+	if rerr := join.EnsureResolved(workDir); rerr != nil {
+		e.transition(ctx, runID, stepState(runID, s.ID, core.StepFailed, next, workDir, core.Result{}, rerr),
+			event.Event{StepID: s.ID, Kind: event.StepFailed, Attempt: next, Err: rerr.Error()})
+		return core.Result{}, rerr
+	}
+
+	// Rung 2: human reviews the resolution.
+	e.transition(ctx, runID, stepState(runID, s.ID, core.StepAwaitingGate, next, workDir, core.Result{}, conflict),
+		event.Event{StepID: s.ID, Kind: event.GateAwaiting, Attempt: next, Err: conflict.Error()})
+	ok, err := e.Gate.Escalate(ctx, runID, s, core.Result{})
+	if err != nil {
+		e.transition(ctx, runID, stepState(runID, s.ID, core.StepFailed, next, workDir, core.Result{}, err),
+			event.Event{StepID: s.ID, Kind: event.StepFailed, Attempt: next, Err: err.Error()})
+		return core.Result{}, err
+	}
+	if !ok {
+		rej := fmt.Errorf("escalated merge conflict rejected")
+		e.transition(ctx, runID, stepState(runID, s.ID, core.StepFailed, next, workDir, core.Result{}, rej),
+			event.Event{StepID: s.ID, Kind: event.StepFailed, Attempt: next, Err: rej.Error()})
+		return core.Result{}, rej
+	}
+
+	// Approved: finalize the resolved worktree (concludes the merge) and build the result.
+	if _, _, cerr := e.WS.Commit(runID, s, workDir); cerr != nil {
+		e.transition(ctx, runID, stepState(runID, s.ID, core.StepFailed, next, workDir, core.Result{}, cerr),
+			event.Event{StepID: s.ID, Kind: event.StepFailed, Attempt: next, Err: cerr.Error()})
+		return core.Result{}, cerr
+	}
+	res, rerr := join.CommittedResult(workDir, s)
+	if rerr != nil {
+		e.transition(ctx, runID, stepState(runID, s.ID, core.StepFailed, next, workDir, core.Result{}, rerr),
+			event.Event{StepID: s.ID, Kind: event.StepFailed, Attempt: next, Err: rerr.Error()})
+		return core.Result{}, rerr
+	}
+	res.StepID = s.ID
+	res.Summary = "merge conflict resolved (arbiter + human)"
+	res.CostUSD = ares.CostUSD // carry the arbiter's resolution cost (CommittedResult has none)
+	e.transition(ctx, runID, stepState(runID, s.ID, core.StepSucceeded, next, workDir, res, nil),
+		event.Event{StepID: s.ID, Kind: event.StepDone, Summary: res.Summary, CostUSD: res.CostUSD, Attempt: next})
 	return res, nil
 }
 

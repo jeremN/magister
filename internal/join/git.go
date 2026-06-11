@@ -77,6 +77,23 @@ func conflictedPaths(workDir string) []string {
 	return nulFields(out)
 }
 
+// EnsureResolved stages the worktree and verifies that no conflict markers remain
+// in the staged tree. Whitespace rules are disabled so an arbiter's trailing
+// whitespace is not misread as a marker — only genuine <<<<<<< / ======= / >>>>>>>
+// lines fail. Used after an arbiter resolves a conflict in place, before the merge
+// is committed; an error means the arbiter left the merge unresolved.
+func EnsureResolved(workDir string) error {
+	if _, err := gitCmd(workDir, "add", "-A"); err != nil {
+		return err
+	}
+	if _, err := gitCmd(workDir,
+		"-c", "core.whitespace=-trailing-space,-blank-at-eol,-space-before-tab,-blank-at-eof",
+		"diff", "--cached", "--check"); err != nil {
+		return fmt.Errorf("unresolved conflict markers remain")
+	}
+	return nil
+}
+
 // CommittedResult builds the result of a committed join worktree: its branch
 // (the worktree's current branch), HEAD sha, and every tracked file as an
 // artifact. Used by merge's clean path, synthesize, and the engine's escalate-

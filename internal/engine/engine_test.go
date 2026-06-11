@@ -1118,3 +1118,98 @@ func TestJoinConflictEscalateRejectAborts(t *testing.T) {
 		t.Fatalf("join status = %q, want failed (escalation rejected)", j.Status)
 	}
 }
+
+// fileWriterExec writes a fixed filename with fixed content, so two such steps
+// in separate worktrees collide on merge (used to drive the conflict ladder).
+type fileWriterExec struct{ file, body string }
+
+func (e fileWriterExec) Run(_ context.Context, t core.Task) (core.Result, error) {
+	out := filepath.Join(t.WorkDir, e.file)
+	if err := os.WriteFile(out, []byte(e.body), 0o644); err != nil {
+		return core.Result{}, err
+	}
+	// Return the written file as an artifact so an isolated step's commitIsolated
+	// stamps its branch onto it — the merge join needs branch-backed inputs.
+	return core.Result{StepID: t.StepID, Summary: "wrote " + e.file,
+		Artifacts: []core.Artifact{{StepID: t.StepID, Path: out}}, CostUSD: 0.01}, nil
+}
+
+func conflictFlow(onConflict flow.FailPolicy) *flow.Flow {
+	autoGate := flow.Gate{Policy: flow.GateAuto, Verifier: &flow.Verifier{Command: "true"}}
+	return &flow.Flow{Name: "f", Steps: []*flow.Step{
+		{ID: "a", Agent: "a", Workspace: flow.WSIsolated, Gate: autoGate},
+		{ID: "b", Agent: "b", Workspace: flow.WSIsolated, Gate: autoGate},
+		{ID: "integrate", Needs: []string{"a", "b"}, Workspace: flow.WSIsolated,
+			Join: &flow.Join{Strategy: flow.JoinMerge, Agent: "arbiter", OnConflict: onConflict}},
+	}}
+}
+
+func TestMergeConflictEscalateApproveCommits(t *testing.T) {
+	execs := map[string]core.Executor{
+		"a":       fileWriterExec{file: "shared.md", body: "A"},
+		"b":       fileWriterExec{file: "shared.md", body: "B"},
+		"arbiter": fileWriterExec{file: "shared.md", body: "RESOLVED"},
+	}
+	eng, st := newGitEngine(t, execs)
+	if err := st.CreateRun(context.Background(), core.RunState{ID: "r1", Name: "f", Status: core.RunPending}); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Run(context.Background(), "r1", conflictFlow(flow.FailEscalate)); err != nil {
+		t.Fatalf("run should succeed after approve: %v", err)
+	}
+	got, _ := st.GetRun(context.Background(), "r1")
+	var integrate core.StepState
+	for _, s := range got.Steps {
+		if s.StepID == "integrate" {
+			integrate = s
+		}
+	}
+	if integrate.Status != core.StepSucceeded {
+		t.Fatalf("integrate status = %q, want succeeded", integrate.Status)
+	}
+	if len(integrate.Artifacts) == 0 || integrate.Artifacts[0].Branch != "step/integrate" {
+		t.Fatalf("integrate not committed on its branch: %+v", integrate.Artifacts)
+	}
+	if integrate.CostUSD != 0.01 {
+		t.Errorf("integrate cost = %v, want the arbiter's 0.01 carried onto the result", integrate.CostUSD)
+	}
+}
+
+// noopArbiterExec succeeds without touching the worktree, leaving the conflict
+// markers in place — used to exercise the resolve-then-verify guard.
+type noopArbiterExec struct{}
+
+func (noopArbiterExec) Run(_ context.Context, t core.Task) (core.Result, error) {
+	return core.Result{StepID: t.StepID, Summary: "did nothing"}, nil
+}
+
+func TestMergeConflictEscalateArbiterLeavesMarkersFails(t *testing.T) {
+	execs := map[string]core.Executor{
+		"a":       fileWriterExec{file: "shared.md", body: "A"},
+		"b":       fileWriterExec{file: "shared.md", body: "B"},
+		"arbiter": noopArbiterExec{}, // leaves the markers unresolved
+	}
+	eng, st := newGitEngine(t, execs) // AutoApprover would approve, but the guard fails first
+	if err := st.CreateRun(context.Background(), core.RunState{ID: "r1", Name: "f", Status: core.RunPending}); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Run(context.Background(), "r1", conflictFlow(flow.FailEscalate)); err == nil {
+		t.Fatal("run should fail when the arbiter leaves conflict markers, even with auto-approve")
+	}
+}
+
+func TestMergeConflictEscalateRejectFails(t *testing.T) {
+	execs := map[string]core.Executor{
+		"a":       fileWriterExec{file: "shared.md", body: "A"},
+		"b":       fileWriterExec{file: "shared.md", body: "B"},
+		"arbiter": fileWriterExec{file: "shared.md", body: "RESOLVED"},
+	}
+	eng, st := newGitEngine(t, execs)
+	eng.Gate = &gate.Evaluator{Approver: rejectApprover{}, Verifier: gate.CommandVerifier{}}
+	if err := st.CreateRun(context.Background(), core.RunState{ID: "r1", Name: "f", Status: core.RunPending}); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Run(context.Background(), "r1", conflictFlow(flow.FailEscalate)); err == nil {
+		t.Fatal("run should fail when the human rejects the conflict resolution")
+	}
+}

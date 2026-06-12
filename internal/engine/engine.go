@@ -48,6 +48,12 @@ func (e *Engine) Provision(runID core.RunID, repo, base string) error {
 	return e.WS.Provision(runID, repo, base)
 }
 
+// BasePath returns a run's scratch base repo path (see core.Workspace.BasePath),
+// so the supervisor can reach it for post-run delivery without holding the WS itself.
+func (e *Engine) BasePath(runID core.RunID) string {
+	return e.WS.BasePath(runID)
+}
+
 // Run executes one flow to completion from scratch. The run row must already
 // exist in the store (the caller creates it); Run drives its status and all step
 // transitions. The first failing step cancels the run's context; the rest unwind.

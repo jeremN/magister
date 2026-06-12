@@ -61,6 +61,10 @@ type Workspace interface {
 	// step runs. An empty repo selects the synthetic empty-base scratch repo
 	// (default; today's behavior). A no-op for the plain Manager (no git backing).
 	Provision(runID RunID, repo, base string) error
+	// BasePath returns the on-disk path of a run's per-run base repo (for an
+	// external-repo run, the scratch clone). Safe to call any time; the path may not
+	// exist yet. Post-run delivery (push) reads the result branch from here.
+	BasePath(runID RunID) string
 	// TeardownRun removes the run's isolated worktrees (the base repo persists). It
 	// is best-effort, idempotent, and a no-op for a run with no worktrees.
 	TeardownRun(runID RunID) error

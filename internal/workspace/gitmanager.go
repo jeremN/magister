@@ -89,6 +89,9 @@ func (m *GitManager) specFor(runID core.RunID) repoSpec {
 func (m *GitManager) baseDir(id core.RunID) string { return filepath.Join(m.Root, string(id), "base") }
 func (m *GitManager) wtDir(id core.RunID) string   { return filepath.Join(m.Root, string(id), "wt") }
 
+// BasePath exposes the per-run base repo path for post-run delivery (push).
+func (m *GitManager) BasePath(runID core.RunID) string { return m.baseDir(runID) }
+
 // run executes git in dir and returns combined output. Args are orchestrator-
 // controlled (run/step IDs, fixed subcommands); no shell is involved.
 func (m *GitManager) run(dir string, args ...string) ([]byte, error) {

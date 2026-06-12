@@ -29,6 +29,12 @@ func (m *Manager) Commit(core.RunID, *flow.Step, string) (string, string, error)
 // to clone. External-repo runs require the GitManager.
 func (m *Manager) Provision(core.RunID, string, string) error { return nil }
 
+// BasePath returns the run's directory. The plain Manager has no git backing, so
+// this is informational; push only targets GitManager-backed external-repo runs.
+func (m *Manager) BasePath(runID core.RunID) string {
+	return filepath.Join(m.Root, string(runID))
+}
+
 func (m *Manager) For(runID core.RunID, s *flow.Step) (string, func() error, error) {
 	dir := filepath.Join(m.Root, string(runID))
 	if s.Workspace == flow.WSIsolated {

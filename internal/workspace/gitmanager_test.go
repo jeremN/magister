@@ -319,4 +319,22 @@ func TestGitManagerProvisionEmptyRepoUsesEmptyBase(t *testing.T) {
 	}
 }
 
+func TestGitManagerBasePath(t *testing.T) {
+	root := t.TempDir()
+	m := &GitManager{Root: root}
+	got := m.BasePath("run-7")
+	if got != filepath.Join(root, "run-7", "base") {
+		t.Errorf("BasePath = %q, want %q", got, filepath.Join(root, "run-7", "base"))
+	}
+}
+
+func TestManagerBasePath(t *testing.T) {
+	root := t.TempDir()
+	m := &Manager{Root: root}
+	got := m.BasePath("run-7")
+	if got != filepath.Join(root, "run-7") {
+		t.Errorf("BasePath = %q, want %q", got, filepath.Join(root, "run-7"))
+	}
+}
+
 var _ core.Workspace = (*GitManager)(nil)

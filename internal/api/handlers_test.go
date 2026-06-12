@@ -178,24 +178,15 @@ func setupAPISourceRepo(t *testing.T) (string, string) {
 		t.Skip("git not on PATH")
 	}
 	src := t.TempDir()
-	run := func(args ...string) string {
-		cmd := exec.Command("git", args...)
-		cmd.Dir = src
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			t.Fatalf("git %v: %v: %s", args, err, out)
-		}
-		return strings.TrimSpace(string(out))
-	}
-	run("init")
-	run("config", "user.name", "fix")
-	run("config", "user.email", "fix@example.com")
+	runGit(t, src, "init")
+	runGit(t, src, "config", "user.name", "fix")
+	runGit(t, src, "config", "user.email", "fix@example.com")
 	if err := os.WriteFile(filepath.Join(src, "hello.txt"), []byte("base\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	run("add", "-A")
-	run("commit", "-m", "base")
-	return src, run("rev-parse", "HEAD")
+	runGit(t, src, "add", "-A")
+	runGit(t, src, "commit", "-m", "base")
+	return src, runGit(t, src, "rev-parse", "HEAD")
 }
 
 func TestCreateRunWithRepoPinsBase(t *testing.T) {
@@ -292,3 +283,140 @@ func TestCreateRunRejectsBadRepo(t *testing.T) {
 		t.Fatalf("status = %d, want 400: %s", resp.StatusCode, b)
 	}
 }
+
+// newGitServer is like testServer but its engine uses a real GitManager, so
+// external-repo runs actually clone + produce a scratch base (needed by push).
+func newGitServer(t *testing.T) (*httptest.Server, core.Store) {
+	t.Helper()
+	st := store.NewMem()
+	reg := supervisor.NewApprovalRegistry()
+	bus := event.NewBus()
+	eng := &engine.Engine{
+		Execs: map[string]core.Executor{"mock": executor.Mock{Name: "mock"}},
+		WS:    &workspace.GitManager{Root: t.TempDir()},
+		Gate:  &gate.Evaluator{Approver: &supervisor.RegistryApprover{Reg: reg}, Verifier: gate.CommandVerifier{}},
+		Joins: join.Default(),
+		Store: st, Bus: bus, Clock: core.SystemClock{},
+	}
+	sup := supervisor.New(eng, st, reg)
+	t.Cleanup(func() { sup.Shutdown(time.Second) })
+	srv := &Server{Sup: sup, Store: st, Bus: bus, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), ShutdownTimeout: time.Second}
+	hs := httptest.NewServer(srv.Router(""))
+	t.Cleanup(func() { hs.Close() })
+	return hs, st
+}
+
+func TestPushEndpointDeliversToRemote(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	src, _ := setupAPISourceRepo(t)
+	bare := t.TempDir()
+	runGit(t, bare, "init", "--bare")
+	runGit(t, src, "remote", "add", "origin", bare)
+
+	hs, st := newGitServer(t)
+	resp, err := http.Post(hs.URL+"/v1/runs?repo="+url.QueryEscape(src)+"&base=HEAD",
+		"application/x-yaml", bytes.NewBufferString(extRepoFlowAPI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rr runResponse
+	json.NewDecoder(resp.Body).Decode(&rr)
+	resp.Body.Close()
+	waitForStatus(t, st, rr.ID, core.RunSucceeded)
+
+	presp, err := http.Post(hs.URL+"/v1/runs/"+string(rr.ID)+"/push", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer presp.Body.Close()
+	if presp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(presp.Body)
+		t.Fatalf("push = %d, want 200: %s", presp.StatusCode, b)
+	}
+	var pr pushResponse
+	if err := json.NewDecoder(presp.Body).Decode(&pr); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if pr.Branch != "magister/"+string(rr.ID) {
+		t.Errorf("dest = %q, want magister/%s", pr.Branch, rr.ID)
+	}
+	if got := runGit(t, bare, "rev-parse", pr.Branch); got != pr.Commit {
+		t.Errorf("remote ref = %q, want %q", got, pr.Commit)
+	}
+}
+
+func TestPushEndpointUnknownRun404(t *testing.T) {
+	hs, _, _ := testServer(t)
+	resp, err := http.Post(hs.URL+"/v1/runs/nope/push", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+func TestPushEndpointNonExternalRepo400(t *testing.T) {
+	hs, _, st := testServer(t)
+	st.CreateRun(context.Background(), core.RunState{
+		ID: "r1", Status: core.RunSucceeded,
+		FlowYAML: "name: f\nsteps:\n  - id: a\n    agent: mock\n",
+	})
+	resp, err := http.Post(hs.URL+"/v1/runs/r1/push", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestPushEndpointNotSucceeded409(t *testing.T) {
+	hs, _, st := testServer(t)
+	st.CreateRun(context.Background(), core.RunState{
+		ID: "r1", Repo: "/abs/proj", Status: core.RunPending,
+		FlowYAML: "name: f\nsteps:\n  - id: a\n    agent: mock\n",
+	})
+	resp, err := http.Post(hs.URL+"/v1/runs/r1/push", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Errorf("status = %d, want 409", resp.StatusCode)
+	}
+}
+
+// runGit is a local git helper for the api tests.
+func runGit(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v: %s", args, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+const extRepoFlowAPI = `name: external-repo
+concurrency: 2
+steps:
+  - id: build-api
+    agent: mock
+    workspace: isolated
+    gate: { policy: auto, verifier: { command: "true" } }
+  - id: build-ui
+    agent: mock
+    workspace: isolated
+    gate: { policy: auto, verifier: { command: "true" } }
+  - id: integrate
+    needs: [build-api, build-ui]
+    workspace: isolated
+    join: { strategy: merge }
+    gate: { policy: auto, verifier: { command: "true" } }
+`

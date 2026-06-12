@@ -21,6 +21,7 @@ func (s *Server) Router(token string) http.Handler {
 	v1.HandleFunc("DELETE /v1/runs/{id}", s.handleCancelRun)
 	v1.HandleFunc("GET /v1/runs/{id}/events", s.handleEvents)
 	v1.HandleFunc("POST /v1/runs/{id}/steps/{step}/approve", s.handleApprove)
+	v1.HandleFunc("POST /v1/runs/{id}/push", s.handlePush)
 
 	authed := chain(v1,
 		authMiddleware(token),

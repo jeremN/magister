@@ -45,6 +45,14 @@ type approveRequest struct {
 	Reason  string `json:"reason,omitempty"`
 }
 
+// pushResponse is returned from POST /v1/runs/{id}/push.
+type pushResponse struct {
+	Remote       string `json:"remote"`
+	Branch       string `json:"branch"`
+	SourceBranch string `json:"source_branch"`
+	Commit       string `json:"commit"`
+}
+
 // errorResponse is the uniform error envelope.
 type errorResponse struct {
 	Error string `json:"error"`

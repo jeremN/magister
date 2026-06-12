@@ -116,6 +116,32 @@ func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "resolved"})
 }
 
+func (s *Server) handlePush(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	opts := supervisor.PushOpts{
+		Remote: q.Get("remote"),
+		As:     q.Get("as"),
+		Step:   q.Get("step"),
+		Force:  q.Get("force") == "true",
+	}
+	res, err := s.Sup.Push(r.Context(), core.RunID(r.PathValue("id")), opts)
+	if err != nil {
+		var pe *supervisor.PushError
+		if errors.As(err, &pe) {
+			writeError(w, pe.Status, pe.Msg)
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, pushResponse{
+		Remote:       res.Remote,
+		Branch:       res.Branch,
+		SourceBranch: res.SourceBranch,
+		Commit:       res.Commit,
+	})
+}
+
 func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }

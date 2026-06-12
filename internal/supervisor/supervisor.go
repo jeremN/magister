@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -13,6 +16,7 @@ import (
 	"concentus/internal/core"
 	"concentus/internal/engine"
 	"concentus/internal/flow"
+	"concentus/internal/workspace"
 )
 
 // Supervisor owns all active runs: it persists+starts new ones, cancels them,
@@ -167,4 +171,130 @@ func (s *Supervisor) Shutdown(timeout time.Duration) {
 	case <-done:
 	case <-time.After(timeout):
 	}
+}
+
+// PushOpts configures Push. Zero values mean: origin remote, magister/<runID>
+// destination, the unique terminal step, no force.
+type PushOpts struct {
+	Remote string // "" → source's origin; a remote name or a URL otherwise
+	As     string // "" → magister/<runID>
+	Step   string // "" → the unique terminal step
+	Force  bool
+}
+
+// PushResult is returned by Push on success.
+type PushResult struct {
+	Remote       string
+	Branch       string // destination branch on the remote
+	SourceBranch string // the run's result branch that was pushed
+	Commit       string
+}
+
+// PushError carries an HTTP status so the API layer maps failures without
+// string-matching.
+type PushError struct {
+	Status int
+	Msg    string
+}
+
+func (e *PushError) Error() string { return e.Msg }
+
+func pushErr(status int, format string, a ...any) *PushError {
+	return &PushError{Status: status, Msg: fmt.Sprintf(format, a...)}
+}
+
+// Push delivers a succeeded external-repo run's result branch to a remote. It is a
+// post-run, store-driven operation (the engine lifecycle is untouched): it reads the
+// run, identifies the result step (the unique terminal, or opts.Step), reads that
+// step's persisted branch, resolves the remote, and pushes from the scratch clone.
+// Errors are *PushError with an HTTP status (see the slice-2 spec).
+func (s *Supervisor) Push(ctx context.Context, runID core.RunID, opts PushOpts) (PushResult, error) {
+	rs, err := s.store.GetRun(ctx, runID)
+	if err != nil {
+		// TODO: the store has no not-found sentinel, so a genuine storage error is
+		// also reported as 404. For a loopback SQLite daemon this is almost always a
+		// real not-found; revisit if the store grows a typed ErrNotFound.
+		return PushResult{}, pushErr(http.StatusNotFound, "unknown run %q", runID)
+	}
+	if rs.Repo == "" {
+		return PushResult{}, pushErr(http.StatusBadRequest, "run %q is not an external-repo run (no --repo)", runID)
+	}
+	if rs.Status != core.RunSucceeded {
+		return PushResult{}, pushErr(http.StatusConflict, "run %q is %s, not succeeded", runID, rs.Status)
+	}
+	f, err := flow.ParseBytes([]byte(rs.FlowYAML))
+	if err != nil {
+		return PushResult{}, pushErr(http.StatusInternalServerError, "parse stored flow: %v", err)
+	}
+	step, perr := pickResultStep(f, opts.Step)
+	if perr != nil {
+		return PushResult{}, perr
+	}
+	branch, commit := stepBranch(rs, step.ID)
+	if branch == "" {
+		return PushResult{}, pushErr(http.StatusBadRequest, "step %q has no branch (not an isolated/committed step)", step.ID)
+	}
+	remoteURL, err := workspace.ResolveRemote(rs.Repo, opts.Remote)
+	if err != nil {
+		return PushResult{}, pushErr(http.StatusBadRequest, "remote: %v", err)
+	}
+	dest := opts.As
+	if dest == "" {
+		dest = "magister/" + string(runID)
+	}
+	base := s.engine.BasePath(runID)
+	if base == "" || !dirHasGit(base) {
+		return PushResult{}, pushErr(http.StatusNotFound, "scratch repo for run %q not found (reclaimed?)", runID)
+	}
+	if err := workspace.PushBranch(base, remoteURL, branch, dest, opts.Force); err != nil {
+		return PushResult{}, pushErr(http.StatusBadGateway, "%v", err)
+	}
+	return PushResult{Remote: remoteURL, Branch: dest, SourceBranch: branch, Commit: commit}, nil
+}
+
+// pickResultStep selects the step whose branch to push: opts.Step if given, else
+// the unique terminal step; zero/ambiguous → error.
+func pickResultStep(f *flow.Flow, stepID string) (*flow.Step, *PushError) {
+	if stepID != "" {
+		for _, st := range f.Steps {
+			if st.ID == stepID {
+				return st, nil
+			}
+		}
+		return nil, pushErr(http.StatusBadRequest, "unknown step %q", stepID)
+	}
+	terms := flow.TerminalSteps(f)
+	switch len(terms) {
+	case 1:
+		return terms[0], nil
+	case 0:
+		return nil, pushErr(http.StatusBadRequest, "flow has no terminal step")
+	default:
+		ids := make([]string, len(terms))
+		for i, t := range terms {
+			ids[i] = t.ID
+		}
+		return nil, pushErr(http.StatusBadRequest, "ambiguous result: %d terminal steps %v; use --step", len(terms), ids)
+	}
+}
+
+// stepBranch returns the persisted branch+commit a step committed to (carried on
+// each of its artifacts); empty branch if the step committed nothing.
+func stepBranch(rs core.RunState, stepID string) (branch, commit string) {
+	for _, st := range rs.Steps {
+		if st.StepID != stepID {
+			continue
+		}
+		for _, a := range st.Artifacts {
+			if a.Branch != "" {
+				return a.Branch, a.Commit
+			}
+		}
+	}
+	return "", ""
+}
+
+func dirHasGit(dir string) bool {
+	_, err := os.Stat(filepath.Join(dir, ".git"))
+	return err == nil
 }

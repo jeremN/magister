@@ -40,8 +40,9 @@ func ResolveBase(repoDir, ref string) (string, error) {
 // (unlike GitManager.run) because its callers craft their own user-facing messages
 // from the high-level failure, not git's stderr. No shell is involved.
 func gitRead(dir string, args ...string) ([]byte, error) {
-	// #nosec G204 -- read-only git (rev-parse only) without a shell; the one
-	// user-supplied arg (a ref) is guarded by --end-of-options at the call site.
+	// #nosec G204 -- read-only git (rev-parse / remote get-url) without a shell;
+	// user-supplied args are guarded at each call site (--end-of-options for a ref,
+	// safeRemoteName for a remote name).
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
 	return cmd.CombinedOutput()

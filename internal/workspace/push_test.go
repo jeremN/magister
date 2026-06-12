@@ -1,6 +1,10 @@
 package workspace
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestResolveRemoteOriginDefault(t *testing.T) {
 	requireGit(t)
@@ -67,5 +71,67 @@ func TestResolveRemoteRejectsRelativeSource(t *testing.T) {
 	requireGit(t)
 	if _, err := ResolveRemote("relative/path", ""); err == nil {
 		t.Error("expected error for a relative source path")
+	}
+}
+
+// setupScratchWithBranch builds a scratch repo with a committed branch and returns
+// (dir, sha). The branch carries one file so the commit is non-empty.
+func setupScratchWithBranch(t *testing.T, branch string) (string, string) {
+	t.Helper()
+	dir := t.TempDir()
+	gitOut(t, dir, "init")
+	gitOut(t, dir, "config", "user.name", "fix")
+	gitOut(t, dir, "config", "user.email", "fix@example.com")
+	gitOut(t, dir, "checkout", "-b", branch)
+	if err := os.WriteFile(filepath.Join(dir, "out.txt"), []byte("work\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitOut(t, dir, "add", "-A")
+	gitOut(t, dir, "commit", "-m", "work")
+	return dir, gitOut(t, dir, "rev-parse", "HEAD")
+}
+
+func TestPushBranchNewBranch(t *testing.T) {
+	requireGit(t)
+	scratch, sha := setupScratchWithBranch(t, "step/integrate")
+	bare := t.TempDir()
+	gitOut(t, bare, "init", "--bare")
+
+	if err := PushBranch(scratch, bare, "step/integrate", "magister/run-1", false); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+	if got := gitOut(t, bare, "rev-parse", "magister/run-1"); got != sha {
+		t.Errorf("remote ref = %q, want %q", got, sha)
+	}
+}
+
+func TestPushBranchRefusesNonFastForwardWithoutForce(t *testing.T) {
+	requireGit(t)
+	scratch, _ := setupScratchWithBranch(t, "step/integrate")
+	bare := t.TempDir()
+	gitOut(t, bare, "init", "--bare")
+	if err := PushBranch(scratch, bare, "step/integrate", "magister/run-1", false); err != nil {
+		t.Fatalf("first push: %v", err)
+	}
+	// Rewrite the branch to a different history (non-fast-forward).
+	gitOut(t, scratch, "commit", "--amend", "-m", "rewritten")
+	if err := PushBranch(scratch, bare, "step/integrate", "magister/run-1", false); err == nil {
+		t.Error("expected non-fast-forward push to be refused without --force")
+	}
+	if err := PushBranch(scratch, bare, "step/integrate", "magister/run-1", true); err != nil {
+		t.Errorf("force push should succeed: %v", err)
+	}
+}
+
+func TestPushBranchRejectsFlaglikeBranch(t *testing.T) {
+	requireGit(t)
+	scratch, _ := setupScratchWithBranch(t, "step/integrate")
+	bare := t.TempDir()
+	gitOut(t, bare, "init", "--bare")
+	if err := PushBranch(scratch, bare, "step/integrate", "--force", false); err == nil {
+		t.Error("expected a flag-like destination branch to be rejected")
+	}
+	if err := PushBranch(scratch, bare, "--upload-pack=x", "magister/run-1", false); err == nil {
+		t.Error("expected a flag-like source branch to be rejected")
 	}
 }

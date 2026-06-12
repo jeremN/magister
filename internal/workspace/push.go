@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"fmt"
+	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -38,6 +39,58 @@ func ResolveRemote(sourceRepo, remote string) (string, error) {
 		return "", fmt.Errorf("remote %q has no url", name)
 	}
 	return url, nil
+}
+
+// PushBranch pushes srcBranch from the scratch clone to destBranch on remoteURL.
+// Without force, git refuses a non-fast-forward overwrite of an existing ref; a
+// new branch always succeeds. The combined git output rides on the error so push
+// failures (auth/network/non-fast-forward) surface the remote's message. Credentials
+// come from the ambient git environment — none are handled here.
+func PushBranch(scratchBase, remoteURL, srcBranch, destBranch string, force bool) error {
+	if scratchBase == "" || !filepath.IsAbs(scratchBase) {
+		return fmt.Errorf("scratch base path must be absolute: %q", scratchBase)
+	}
+	if !safeRef(srcBranch) {
+		return fmt.Errorf("invalid source branch %q", srcBranch)
+	}
+	if !safeRef(destBranch) {
+		return fmt.Errorf("invalid destination branch %q", destBranch)
+	}
+	args := []string{"push"}
+	if force {
+		args = append(args, "--force")
+	}
+	// -- separates the <repository> <refspec> operands from options, so a "-"-leading
+	// remote/branch can't be parsed as a flag (the refs are also safeRef-validated).
+	args = append(args, "--", remoteURL, srcBranch+":refs/heads/"+destBranch)
+	// #nosec G204 -- git push without a shell; refs validated; operands after --.
+	cmd := exec.Command("git", args...)
+	cmd.Dir = scratchBase
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git push: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// safeRef accepts a conservative branch-name charset (rejecting a leading "-",
+// "..", a trailing "." or ".lock", and anything outside [A-Za-z0-9/._-]) so a name
+// cannot smuggle a flag or corrupt the src:refs/heads/dest refspec. These also match
+// git's own check-ref-format rules, so a valid safeRef won't be rejected downstream.
+func safeRef(s string) bool {
+	if s == "" || strings.HasPrefix(s, "-") || strings.Contains(s, "..") ||
+		strings.HasSuffix(s, ".") || strings.HasSuffix(s, ".lock") {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '/' || r == '-' || r == '_' || r == '.':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // looksLikeURL reports whether s is a git URL (scheme://… or scp-like user@host:path)

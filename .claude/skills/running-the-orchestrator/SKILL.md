@@ -90,7 +90,17 @@ By default the per-run scratch repo is a synthetic empty base. To run a flow aga
 cm run flows/external-repo.yaml --repo /abs/path/to/repo --base main
 ```
 
-The daemon **clones** `<repo>` read-only into the per-run scratch (it never writes the source), checks out the pinned base commit, and `step/<id>` branches fork from there — so joins produce real, mergeable history over real code. `--base` defaults to the source repo's `HEAD`; it is validated and pinned to a concrete SHA at submit (a bad repo path or unresolvable ref → `400`). The result lives in the scratch clone: `cm get <run>` surfaces its path as the `scratch` field (`<runs>/<run>/base`). Inspect with `git -C <scratch> log --graph --all` — `step/integrate` will be a 2-parent merge commit whose tree contains the cloned base's files **plus** each upstream's work. (Pushing the result back / opening a PR is a later slice.) Zero-cost demo: **`flows/external-repo.yaml`** (same shape as the git-native merge demo; the flow stays repo-agnostic — provisioning comes from `--repo`/`--base`, not the YAML).
+The daemon **clones** `<repo>` read-only into the per-run scratch (it never writes the source), checks out the pinned base commit, and `step/<id>` branches fork from there — so joins produce real, mergeable history over real code. `--base` defaults to the source repo's `HEAD`; it is validated and pinned to a concrete SHA at submit (a bad repo path or unresolvable ref → `400`). The result lives in the scratch clone: `cm get <run>` surfaces its path as the `scratch` field (`<runs>/<run>/base`). Inspect with `git -C <scratch> log --graph --all` — `step/integrate` will be a 2-parent merge commit whose tree contains the cloned base's files **plus** each upstream's work. Zero-cost demo: **`flows/external-repo.yaml`** (same shape as the git-native merge demo; the flow stays repo-agnostic — provisioning comes from `--repo`/`--base`, not the YAML).
+
+### Push the result to a remote (`cm push`)
+
+After an external-repo run succeeds, deliver its result branch to a git **remote**:
+
+```
+cm push <run> [--remote <url-or-name>] [--as <branch>] [--step <id>] [--force]
+```
+
+The daemon pushes the run's **result branch** (the terminal step's `step/<id>`, e.g. `step/integrate`; `--step` disambiguates a multi-leaf flow) from the scratch clone to the remote — **default = the source repo's own `origin`** (`--remote` takes a remote name resolved against the source, or a URL) — as **`magister/<run>`** by default (`--as` to rename). It refuses to clobber an existing remote branch unless `--force`. The source repo is never written. **Credentials are the daemon's ambient git environment** (SSH agent / credential helper / cached HTTPS) — none are stored; an auth/network failure returns `502` with git's message. Other errors: `409` if the run hasn't succeeded, `400` not-external-repo / ambiguous result / chosen step has no branch, `404` unknown run / scratch reclaimed. The run lifecycle is untouched — push is an explicit, deliberate post-run action (`POST /v1/runs/{id}/push`). Demo against a local **bare** repo as the remote: `git init --bare /tmp/bare && git -C <src> remote add origin /tmp/bare`, run the flow with `--repo <src>`, then `cm push <run>` and `git -C /tmp/bare log magister/<run>`.
 
 ## Gotchas (each cost real time to learn)
 
@@ -102,4 +112,4 @@ The daemon **clones** `<repo>` read-only into the per-run scratch (it never writ
 
 ## cm command surface
 
-`cm run <flow.yaml> [--repo <abs-path>] [--base <ref>] [--watch]` · `cm ls` · `cm get <run>` · `cm watch <run>` · `cm approve|reject <run> <step> [reason]` · `cm cancel <run>`. All target `$MAGISTER_ADDR`. `--repo`/`--base` run the flow against a real git repo (see *External repo* above).
+`cm run <flow.yaml> [--repo <abs-path>] [--base <ref>] [--watch]` · `cm ls` · `cm get <run>` · `cm watch <run>` · `cm approve|reject <run> <step> [reason]` · `cm cancel <run>` · `cm push <run> [--remote <url-or-name>] [--as <branch>] [--step <id>] [--force]`. All target `$MAGISTER_ADDR`. `--repo`/`--base` run the flow against a real git repo, and `cm push` delivers its result branch to a remote (see *External repo* above).

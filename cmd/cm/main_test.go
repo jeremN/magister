@@ -93,6 +93,50 @@ func TestRunPassesRepoBaseAsQuery(t *testing.T) {
 	}
 }
 
+func TestPushPassesOptionsAsQuery(t *testing.T) {
+	var got http.Request
+	srv := fakeAPI(t, http.StatusOK,
+		`{"remote":"git@h:me/x.git","branch":"magister/r1","source_branch":"step/integrate","commit":"abc"}`, &got)
+	defer srv.Close()
+
+	var out bytes.Buffer
+	code := dispatch([]string{"push", "r1", "--remote", "upstream", "--as", "feature/x", "--step", "integrate", "--force"}, srv.URL, &out)
+	if code != 0 {
+		t.Fatalf("exit = %d, out=%s", code, out.String())
+	}
+	if got.Method != http.MethodPost || got.URL.Path != "/v1/runs/r1/push" {
+		t.Errorf("request = %s %s, want POST /v1/runs/r1/push", got.Method, got.URL.Path)
+	}
+	q := got.URL.Query()
+	if q.Get("remote") != "upstream" || q.Get("as") != "feature/x" || q.Get("step") != "integrate" || q.Get("force") != "true" {
+		t.Errorf("query = %v, want remote/as/step/force set", q)
+	}
+	if s := out.String(); !strings.Contains(s, "step/integrate") || !strings.Contains(s, "magister/r1") {
+		t.Errorf("output missing source/dest branch: %q", s)
+	}
+}
+
+func TestPushRequiresRun(t *testing.T) {
+	var out bytes.Buffer
+	if code := dispatch([]string{"push"}, "http://x", &out); code != 2 {
+		t.Errorf("exit = %d, want 2 (usage)", code)
+	}
+}
+
+func TestPushNon200PrintsError(t *testing.T) {
+	var got http.Request
+	srv := fakeAPI(t, http.StatusNotFound, `{"error":"unknown run"}`, &got)
+	defer srv.Close()
+	var out bytes.Buffer
+	code := dispatch([]string{"push", "no-such-run"}, srv.URL, &out)
+	if code != 1 {
+		t.Errorf("exit = %d, want 1", code)
+	}
+	if !strings.Contains(out.String(), "unknown run") {
+		t.Errorf("expected server error in output, got %q", out.String())
+	}
+}
+
 func TestApproveRetriesOn409(t *testing.T) {
 	var calls int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

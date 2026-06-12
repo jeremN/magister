@@ -30,7 +30,7 @@ func main() {
 
 func dispatch(args []string, base string, out io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(out, "usage: cm <run|ls|get|watch|approve|reject|cancel> ...")
+		fmt.Fprintln(out, "usage: cm <run|ls|get|watch|approve|reject|cancel|push> ...")
 		return 2
 	}
 	c := &client{base: base, http: &http.Client{Timeout: 0}}
@@ -61,6 +61,8 @@ func dispatch(args []string, base string, out io.Writer) int {
 			return 2
 		}
 		return c.delete("/v1/runs/"+args[1], out)
+	case "push":
+		return c.push(args[1:], out)
 	default:
 		fmt.Fprintf(out, "unknown command %q\n", args[0])
 		return 2
@@ -217,6 +219,81 @@ func (c *client) delete(path string, out io.Writer) int {
 		return printErr(resp, out)
 	}
 	fmt.Fprintln(out, "canceled")
+	return 0
+}
+
+func (c *client) push(args []string, out io.Writer) int {
+	var run, remote, as, step string
+	force := false
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--force":
+			force = true
+		case "--remote":
+			i++
+			if i >= len(args) {
+				fmt.Fprintln(out, "usage: --remote requires a value")
+				return 2
+			}
+			remote = args[i]
+		case "--as":
+			i++
+			if i >= len(args) {
+				fmt.Fprintln(out, "usage: --as requires a value")
+				return 2
+			}
+			as = args[i]
+		case "--step":
+			i++
+			if i >= len(args) {
+				fmt.Fprintln(out, "usage: --step requires a value")
+				return 2
+			}
+			step = args[i]
+		default:
+			run = args[i]
+		}
+	}
+	if run == "" {
+		fmt.Fprintln(out, "usage: cm push <run> [--remote <url-or-name>] [--as <branch>] [--step <id>] [--force]")
+		return 2
+	}
+	q := url.Values{}
+	if remote != "" {
+		q.Set("remote", remote)
+	}
+	if as != "" {
+		q.Set("as", as)
+	}
+	if step != "" {
+		q.Set("step", step)
+	}
+	if force {
+		q.Set("force", "true")
+	}
+	endpoint := c.base + "/v1/runs/" + run + "/push"
+	if len(q) > 0 {
+		endpoint += "?" + q.Encode()
+	}
+	resp, err := c.http.Post(endpoint, "application/json", nil)
+	if err != nil {
+		fmt.Fprintln(out, "push:", err)
+		return 1
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return printErr(resp, out)
+	}
+	var pr struct {
+		Remote       string `json:"remote"`
+		Branch       string `json:"branch"`
+		SourceBranch string `json:"source_branch"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&pr); err != nil {
+		fmt.Fprintln(out, "push: decode response:", err)
+		return 1
+	}
+	fmt.Fprintf(out, "pushed %s → %s on %s\n", pr.SourceBranch, pr.Branch, pr.Remote)
 	return 0
 }
 

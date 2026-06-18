@@ -169,7 +169,9 @@ func TestPRExistingOpenPRReturns409(t *testing.T) {
 		t.Errorf("status = %d, want 409", got)
 	}
 	var pe *PRError
-	errors.As(err, &pe)
+	if !errors.As(err, &pe) {
+		t.Fatalf("expected *PRError, got %T", err)
+	}
 	if !strings.Contains(pe.Msg, "pull/2") {
 		t.Errorf("message should carry the existing PR URL, got %q", pe.Msg)
 	}
@@ -187,7 +189,9 @@ func TestPRUnpushedBranchSaysPushFirst(t *testing.T) {
 		t.Errorf("status = %d, want 409", got)
 	}
 	var pe *PRError
-	errors.As(err, &pe)
+	if !errors.As(err, &pe) {
+		t.Fatalf("expected *PRError, got %T", err)
+	}
 	if !strings.Contains(pe.Msg, "cm push") {
 		t.Errorf("message should tell the user to push first, got %q", pe.Msg)
 	}

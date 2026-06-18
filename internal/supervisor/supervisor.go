@@ -16,6 +16,7 @@ import (
 	"concentus/internal/core"
 	"concentus/internal/engine"
 	"concentus/internal/flow"
+	"concentus/internal/host"
 	"concentus/internal/workspace"
 )
 
@@ -29,6 +30,9 @@ type Supervisor struct {
 
 	// Log records non-fatal resume issues; nil = discard. The daemon wires a real one.
 	Log *slog.Logger
+
+	// Host is the gh-backed PR client; nil → a default host.New() (the gh CLI on PATH).
+	Host *host.Runner
 
 	mu   sync.Mutex
 	runs map[core.RunID]context.CancelFunc
@@ -109,6 +113,13 @@ func (s *Supervisor) logger() *slog.Logger {
 		return s.Log
 	}
 	return discardLogger
+}
+
+func (s *Supervisor) hostRunner() *host.Runner {
+	if s.Host != nil {
+		return s.Host
+	}
+	return host.New()
 }
 
 // resetIncompleteSteps marks every non-succeeded step of a resumed run as pending,

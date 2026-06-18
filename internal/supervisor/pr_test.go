@@ -157,3 +157,50 @@ func TestPRRejectsUnsafeHeadOrBase(t *testing.T) {
 		t.Error("unsafe --base should be 400")
 	}
 }
+
+func TestPRExistingOpenPRReturns409(t *testing.T) {
+	requireGitS(t)
+	st := store.NewMem()
+	sup := newPRSup(t, st)
+	t.Setenv("FAKE_GH_EXISTING_PR", "https://github.com/test-owner/test-repo/pull/2")
+	seedExtRun(t, st, "r1", srcWithGHOrigin(t, "https://github.com/test-owner/test-repo.git"))
+	_, err := sup.PR(context.Background(), "r1", PROpts{})
+	if got := prErrStatus(t, err); got != http.StatusConflict {
+		t.Errorf("status = %d, want 409", got)
+	}
+	var pe *PRError
+	errors.As(err, &pe)
+	if !strings.Contains(pe.Msg, "pull/2") {
+		t.Errorf("message should carry the existing PR URL, got %q", pe.Msg)
+	}
+}
+
+func TestPRUnpushedBranchSaysPushFirst(t *testing.T) {
+	requireGitS(t)
+	st := store.NewMem()
+	sup := newPRSup(t, st)
+	t.Setenv("FAKE_GH_CREATE_FAIL", "GraphQL: Head sha can't be blank")
+	t.Setenv("FAKE_GH_BRANCH_MISSING", "1")
+	seedExtRun(t, st, "r1", srcWithGHOrigin(t, "https://github.com/test-owner/test-repo.git"))
+	_, err := sup.PR(context.Background(), "r1", PROpts{})
+	if got := prErrStatus(t, err); got != http.StatusConflict {
+		t.Errorf("status = %d, want 409", got)
+	}
+	var pe *PRError
+	errors.As(err, &pe)
+	if !strings.Contains(pe.Msg, "cm push") {
+		t.Errorf("message should tell the user to push first, got %q", pe.Msg)
+	}
+}
+
+func TestPRCreateFailureWithExistingBranchIs502(t *testing.T) {
+	requireGitS(t)
+	st := store.NewMem()
+	sup := newPRSup(t, st)
+	t.Setenv("FAKE_GH_CREATE_FAIL", "GraphQL: base branch nonsense") // branch exists (no FAKE_GH_BRANCH_MISSING)
+	seedExtRun(t, st, "r1", srcWithGHOrigin(t, "https://github.com/test-owner/test-repo.git"))
+	_, err := sup.PR(context.Background(), "r1", PROpts{})
+	if got := prErrStatus(t, err); got != http.StatusBadGateway {
+		t.Errorf("status = %d, want 502", got)
+	}
+}

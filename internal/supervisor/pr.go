@@ -92,11 +92,20 @@ func (s *Supervisor) PR(ctx context.Context, runID core.RunID, opts PROpts) (PRR
 	}
 
 	runner := s.hostRunner()
+	if url, exists, err := runner.ExistingOpenPR(ctx, owner, repo, head); err != nil {
+		return PRResult{}, prErr(http.StatusBadGateway, "%v", err)
+	} else if exists {
+		return PRResult{}, prErr(http.StatusConflict, "PR already exists for %s: %s", head, url)
+	}
+
 	url, err := runner.CreatePR(ctx, host.CreateOpts{
 		Owner: owner, Repo: repo, Head: head, Base: opts.Base,
 		Title: title, Body: body, Draft: opts.Draft,
 	})
 	if err != nil {
+		if !runner.BranchExists(ctx, owner, repo, head) {
+			return PRResult{}, prErr(http.StatusConflict, "branch %q not on remote; run `cm push %s` first", head, runID)
+		}
 		return PRResult{}, prErr(http.StatusBadGateway, "%v", err)
 	}
 	return PRResult{URL: url, Repo: owner + "/" + repo, Head: head, Base: opts.Base, Draft: opts.Draft}, nil

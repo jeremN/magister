@@ -1,6 +1,94 @@
 package host
 
-import "testing"
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func stubPath(t *testing.T, name string) string {
+	t.Helper()
+	abs, err := filepath.Abs(filepath.Join("testdata", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		t.Fatalf("stub %s missing: %v", name, err)
+	}
+	if info.Mode()&0o111 == 0 {
+		t.Fatalf("stub %s is not executable — chmod +x it", name)
+	}
+	return abs
+}
+
+func TestRunnerCreatePR(t *testing.T) {
+	argv := filepath.Join(t.TempDir(), "argv")
+	t.Setenv("FAKE_GH_ARGV_FILE", argv)
+	t.Setenv("FAKE_GH_PR_URL", "https://github.com/o/r/pull/9")
+	r := &Runner{Bin: stubPath(t, "fake-gh")}
+	url, err := r.CreatePR(context.Background(), CreateOpts{
+		Owner: "o", Repo: "r", Head: "magister/x", Base: "main",
+		Title: "the title", Body: "the body", Draft: true,
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if url != "https://github.com/o/r/pull/9" {
+		t.Errorf("url = %q", url)
+	}
+	got, _ := os.ReadFile(argv)
+	for _, want := range []string{"pr", "create", "--repo=o/r", "--head=magister/x", "--base=main", "--title=the title", "--body=the body", "--draft"} {
+		if !strings.Contains(string(got), want+"\n") {
+			t.Errorf("argv missing %q; got:\n%s", want, got)
+		}
+	}
+}
+
+func TestRunnerCreatePROmitsBaseWhenEmpty(t *testing.T) {
+	argv := filepath.Join(t.TempDir(), "argv")
+	t.Setenv("FAKE_GH_ARGV_FILE", argv)
+	r := &Runner{Bin: stubPath(t, "fake-gh")}
+	if _, err := r.CreatePR(context.Background(), CreateOpts{Owner: "o", Repo: "r", Head: "h", Title: "t", Body: "b"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(argv); strings.Contains(string(got), "--base=") {
+		t.Errorf("expected no --base; got:\n%s", got)
+	}
+}
+
+func TestRunnerCreatePRFailureSurfacesStderr(t *testing.T) {
+	t.Setenv("FAKE_GH_CREATE_FAIL", "boom: bad base")
+	r := &Runner{Bin: stubPath(t, "fake-gh")}
+	if _, err := r.CreatePR(context.Background(), CreateOpts{Owner: "o", Repo: "r", Head: "h", Title: "t", Body: "b"}); err == nil || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("want failure surfacing stderr, got %v", err)
+	}
+}
+
+func TestRunnerExistingOpenPR(t *testing.T) {
+	r := &Runner{Bin: stubPath(t, "fake-gh")}
+	if url, ok, err := r.ExistingOpenPR(context.Background(), "o", "r", "magister/x"); err != nil || ok || url != "" {
+		t.Fatalf("want none, got url=%q ok=%v err=%v", url, ok, err)
+	}
+	t.Setenv("FAKE_GH_EXISTING_PR", "https://github.com/o/r/pull/3")
+	url, ok, err := r.ExistingOpenPR(context.Background(), "o", "r", "magister/x")
+	if err != nil || !ok || url != "https://github.com/o/r/pull/3" {
+		t.Fatalf("want existing, got url=%q ok=%v err=%v", url, ok, err)
+	}
+}
+
+func TestRunnerBranchExists(t *testing.T) {
+	r := &Runner{Bin: stubPath(t, "fake-gh")}
+	if !r.BranchExists(context.Background(), "o", "r", "magister/x") {
+		t.Error("want exists")
+	}
+	t.Setenv("FAKE_GH_BRANCH_MISSING", "1")
+	if r.BranchExists(context.Background(), "o", "r", "magister/x") {
+		t.Error("want missing")
+	}
+}
 
 func TestParseRemote(t *testing.T) {
 	cases := []struct {

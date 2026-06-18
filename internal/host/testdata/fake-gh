@@ -1,0 +1,35 @@
+#!/bin/sh
+# fake-gh — offline gh stub for tests. Behavior is env-driven (see FAKE_GH_* in the
+# slice-3 plan). Records argv (one arg per line, '---' per call) to $FAKE_GH_ARGV_FILE.
+if [ -n "$FAKE_GH_ARGV_FILE" ]; then
+  for a in "$@"; do printf '%s\n' "$a"; done >> "$FAKE_GH_ARGV_FILE"
+  printf -- '---\n' >> "$FAKE_GH_ARGV_FILE"
+fi
+case "$1" in
+  pr)
+    case "$2" in
+      list)
+        if [ -n "$FAKE_GH_EXISTING_PR" ]; then
+          printf '[{"url":"%s"}]\n' "$FAKE_GH_EXISTING_PR"
+        else
+          printf '[]\n'
+        fi
+        ;;
+      create)
+        if [ -n "$FAKE_GH_CREATE_FAIL" ]; then
+          printf '%s\n' "$FAKE_GH_CREATE_FAIL" 1>&2
+          exit 1
+        fi
+        printf '%s\n' "${FAKE_GH_PR_URL:-https://github.com/o/r/pull/1}"
+        ;;
+      *) printf 'fake-gh: unexpected pr subcommand %s\n' "$2" 1>&2; exit 2 ;;
+    esac
+    ;;
+  api)
+    if [ -n "$FAKE_GH_BRANCH_MISSING" ]; then
+      printf 'gh: Not Found (HTTP 404)\n' 1>&2
+      exit 1
+    fi
+    ;;
+  *) printf 'fake-gh: unexpected command %s\n' "$1" 1>&2; exit 2 ;;
+esac

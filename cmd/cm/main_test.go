@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -169,5 +170,58 @@ func TestApproveRetriesOn409(t *testing.T) {
 	}
 	if n := atomic.LoadInt32(&calls); n < 3 {
 		t.Fatalf("expected ≥3 attempts (retried past 409), got %d", n)
+	}
+}
+
+func TestPRSendsJSONBody(t *testing.T) {
+	var got http.Request
+	var body []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = *r
+		body, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		writeBody(w, `{"url":"https://github.com/o/r/pull/3","repo":"o/r","head":"magister/r1"}`)
+	}))
+	defer srv.Close()
+
+	var out bytes.Buffer
+	code := dispatch([]string{"pr", "r1", "--title", "My PR", "--base", "main", "--draft"}, srv.URL, &out)
+	if code != 0 {
+		t.Fatalf("exit = %d, out=%s", code, out.String())
+	}
+	if got.Method != http.MethodPost || got.URL.Path != "/v1/runs/r1/pr" {
+		t.Errorf("request = %s %s, want POST /v1/runs/r1/pr", got.Method, got.URL.Path)
+	}
+	var sent map[string]any
+	if err := json.Unmarshal(body, &sent); err != nil {
+		t.Fatalf("body not json: %v", err)
+	}
+	if sent["title"] != "My PR" || sent["base"] != "main" || sent["draft"] != true {
+		t.Errorf("body = %v, want title/base/draft set", sent)
+	}
+	if !strings.Contains(out.String(), "https://github.com/o/r/pull/3") {
+		t.Errorf("output missing PR url: %q", out.String())
+	}
+}
+
+func TestPRRequiresRun(t *testing.T) {
+	var out bytes.Buffer
+	if code := dispatch([]string{"pr"}, "http://x", &out); code != 2 {
+		t.Errorf("exit = %d, want 2 (usage)", code)
+	}
+}
+
+func TestPRNon200PrintsError(t *testing.T) {
+	var got http.Request
+	srv := fakeAPI(t, http.StatusConflict, `{"error":"PR already exists for magister/r1: https://github.com/o/r/pull/9"}`, &got)
+	defer srv.Close()
+	var out bytes.Buffer
+	code := dispatch([]string{"pr", "r1"}, srv.URL, &out)
+	if code != 1 {
+		t.Errorf("exit = %d, want 1", code)
+	}
+	if !strings.Contains(out.String(), "pull/9") {
+		t.Errorf("output should surface the existing PR url, got %q", out.String())
 	}
 }

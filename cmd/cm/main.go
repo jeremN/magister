@@ -30,7 +30,7 @@ func main() {
 
 func dispatch(args []string, base string, out io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(out, "usage: cm <run|ls|get|watch|approve|reject|cancel|push> ...")
+		fmt.Fprintln(out, "usage: cm <run|ls|get|watch|approve|reject|cancel|push|pr> ...")
 		return 2
 	}
 	c := &client{base: base, http: &http.Client{Timeout: 0}}
@@ -63,6 +63,8 @@ func dispatch(args []string, base string, out io.Writer) int {
 		return c.delete("/v1/runs/"+args[1], out)
 	case "push":
 		return c.push(args[1:], out)
+	case "pr":
+		return c.pr(args[1:], out)
 	default:
 		fmt.Fprintf(out, "unknown command %q\n", args[0])
 		return 2
@@ -294,6 +296,50 @@ func (c *client) push(args []string, out io.Writer) int {
 		return 1
 	}
 	fmt.Fprintf(out, "pushed %s → %s on %s\n", pr.SourceBranch, pr.Branch, pr.Remote)
+	return 0
+}
+
+func (c *client) pr(args []string, out io.Writer) int {
+	var run string
+	body := map[string]any{}
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--draft":
+			body["draft"] = true
+		case "--remote", "--as", "--step", "--base", "--title", "--body":
+			flag := args[i]
+			i++
+			if i >= len(args) {
+				fmt.Fprintf(out, "usage: %s requires a value\n", flag)
+				return 2
+			}
+			body[flag[2:]] = args[i] // strip "--"
+		default:
+			run = args[i]
+		}
+	}
+	if run == "" {
+		fmt.Fprintln(out, "usage: cm pr <run> [--remote <url-or-name>] [--as <branch>] [--step <id>] [--base <branch>] [--title <t>] [--body <b>] [--draft]")
+		return 2
+	}
+	payload, _ := json.Marshal(body)
+	resp, err := c.http.Post(c.base+"/v1/runs/"+run+"/pr", "application/json", bytes.NewReader(payload))
+	if err != nil {
+		fmt.Fprintln(out, "pr:", err)
+		return 1
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return printErr(resp, out)
+	}
+	var pr struct {
+		URL string `json:"url"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&pr); err != nil {
+		fmt.Fprintln(out, "pr: decode response:", err)
+		return 1
+	}
+	fmt.Fprintln(out, "opened", pr.URL)
 	return 0
 }
 

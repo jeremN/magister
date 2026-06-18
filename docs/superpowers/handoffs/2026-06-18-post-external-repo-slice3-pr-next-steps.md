@@ -2,6 +2,16 @@
 
 **Pick up next session (fresh context).** **external-repo Slice 3 (open a PR)** is merged to `main` and complete. After a succeeded external-repo run is pushed (`cm push`), `cm pr <run>` opens a GitHub Pull Request on the pushed branch. **This was the third and final slice of the flow → real repo → PR north star — that north star is now COMPLETE.**
 
+## Real-agent capstone — DONE (2026-06-18), the whole system run for real with ZERO new code
+
+After Slice 3 the entire pipeline had only ever run with the `mock` agent. The capstone closed that gap: a **real `codex` agent** (ChatGPT-account auth) ran against a clone of `jeremN/site_test` and its work shipped as a **merged PR** — proving the B-slices (real CLIAgents), Slice C (git-worktree workspaces), and external-repo Slices 1–3 (delivery) compose with **no glue code**.
+
+- Flow: a one-step `agent: codex`, `workspace: isolated` step (`flows`-style, prompt = "add a concise CONTRIBUTING.md, change nothing else"). A single isolated step is its own DAG leaf, so push/PR needed no `--step`.
+- Live SSE showed **real `agent.tool` milestones mid-step**: `command_execution: …rg --files…` (codex checking for an existing file) then `file_change: add CONTRIBUTING.md`, both *before* `step.done` — the persist-then-publish streaming working with a real agent, not a mock.
+- The engine's `commitIsolated` turned codex's real worktree edit into `step/contribute` (a genuine 24-line CONTRIBUTING.md over base `aa2a2f2`, nothing else touched) → `cm push` → `magister/<run>` on the real remote → `cm pr` → **PR #3**, then **merged to `site_test` `main`** (`092f7ff`, branch deleted).
+- Also exercised earlier in the session: the **mock** manual proof (PR #2, since closed). Both mock and real paths now verified live.
+- **Process note:** drive this with the `running-the-orchestrator` skill. The daemon must be launched **sandbox-disabled** (its `codex`/`git`/`gh` children need network + `~/.codex` + the gh keyring); `cm` reads `$MAGISTER_ADDR` verbatim (needs `http://`). codex auth check: `codex login status`. Daemon SIGTERM exits 143/144 (graceful, not a failure).
+
 ## State (verified)
 
 - `main` at `b08cf39`, clean. `go test ./...` → all packages green; `go test -race ./...` → 264/264 across 16 packages; `go vet ./...` clean; `gofmt -l` clean for the slice's packages; `go 1.22`. **No new deps.**

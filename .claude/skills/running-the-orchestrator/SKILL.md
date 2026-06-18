@@ -102,6 +102,16 @@ cm push <run> [--remote <url-or-name>] [--as <branch>] [--step <id>] [--force]
 
 The daemon pushes the run's **result branch** (the terminal step's `step/<id>`, e.g. `step/integrate`; `--step` disambiguates a multi-leaf flow) from the scratch clone to the remote — **default = the source repo's own `origin`** (`--remote` takes a remote name resolved against the source, or a URL) — as **`magister/<run>`** by default (`--as` to rename). It refuses to clobber an existing remote branch unless `--force`. The source repo is never written. **Credentials are the daemon's ambient git environment** (SSH agent / credential helper / cached HTTPS) — none are stored; an auth/network failure returns `502` with git's message. Other errors: `409` if the run hasn't succeeded, `400` not-external-repo / ambiguous result / chosen step has no branch, `404` unknown run / scratch reclaimed. The run lifecycle is untouched — push is an explicit, deliberate post-run action (`POST /v1/runs/{id}/push`). Demo against a local **bare** repo as the remote: `git init --bare /tmp/bare && git -C <src> remote add origin /tmp/bare`, run the flow with `--repo <src>`, then `cm push <run>` and `git -C /tmp/bare log magister/<run>`.
 
+### Open a Pull Request on the pushed branch (`cm pr`)
+
+After pushing with `cm push`, open a GitHub Pull Request from the `magister/<run>` branch:
+
+- `cm pr <run> [--remote <url-or-name>] [--as <branch>] [--step <id>] [--base <branch>] [--title <t>] [--body <b>] [--draft]`
+  opens a GitHub Pull Request on the pushed `magister/<runID>` branch of a succeeded
+  external-repo run (run `cm push <run>` first). Uses the `gh` CLI with ambient auth
+  (no token handling); `owner/repo` is parsed from the source's origin remote. A PR
+  that already exists is reported as a 409 with its URL.
+
 ## Gotchas (each cost real time to learn)
 
 - **`flows/feature-flow.yaml` does NOT run standalone.** It references the unregistered `gemini` agent, `manual` gates (would block on `cm approve`), and pricey `opus`. (Its `integrate` step is now a valid git-native `merge`+`escalate` join — isolated, with a `join.agent` — but the surrounding agents still make it a poor quick smoke.) Use `flows/git-native-merge.yaml` for a mock merge smoke, or write a minimal flow as above.
@@ -112,4 +122,4 @@ The daemon pushes the run's **result branch** (the terminal step's `step/<id>`, 
 
 ## cm command surface
 
-`cm run <flow.yaml> [--repo <abs-path>] [--base <ref>] [--watch]` · `cm ls` · `cm get <run>` · `cm watch <run>` · `cm approve|reject <run> <step> [reason]` · `cm cancel <run>` · `cm push <run> [--remote <url-or-name>] [--as <branch>] [--step <id>] [--force]`. All target `$MAGISTER_ADDR`. `--repo`/`--base` run the flow against a real git repo, and `cm push` delivers its result branch to a remote (see *External repo* above).
+`cm run <flow.yaml> [--repo <abs-path>] [--base <ref>] [--watch]` · `cm ls` · `cm get <run>` · `cm watch <run>` · `cm approve|reject <run> <step> [reason]` · `cm cancel <run>` · `cm push <run> [--remote <url-or-name>] [--as <branch>] [--step <id>] [--force]` · `cm pr <run> [--remote <url-or-name>] [--as <branch>] [--step <id>] [--base <branch>] [--title <t>] [--body <b>] [--draft]`. All target `$MAGISTER_ADDR`. `--repo`/`--base` run the flow against a real git repo; `cm push` delivers its result branch to a remote; `cm pr` opens a GitHub PR on that branch (see *External repo* above).

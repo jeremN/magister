@@ -18,13 +18,22 @@ func TestRunServesHealthzAndShutsDown(t *testing.T) {
 	errc := make(chan error, 1)
 	go func() {
 		errc <- run([]string{"-addr", "127.0.0.1:0", "-db", db}, func(string) string { return "" }, stop, func(addr string) {
-			// addr callback: hit healthz, then signal stop
+			// addr callback: hit healthz + readyz, then signal stop
 			deadline := time.Now().Add(2 * time.Second)
 			for time.Now().Before(deadline) {
 				resp, err := http.Get("http://" + addr + "/healthz")
 				if err == nil {
 					resp.Body.Close()
 					if resp.StatusCode == http.StatusOK {
+						rresp, rerr := http.Get("http://" + addr + "/readyz")
+						if rerr != nil {
+							t.Errorf("readyz GET failed: %v", rerr)
+						} else {
+							if rresp.StatusCode != http.StatusOK {
+								t.Errorf("readyz while live = %d, want 200", rresp.StatusCode)
+							}
+							rresp.Body.Close()
+						}
 						close(stop)
 						return
 					}

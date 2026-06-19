@@ -70,3 +70,23 @@ func TestParseScratchFlagsAndEnv(t *testing.T) {
 		t.Errorf("ScratchTTL env = %v, want 2h", c.ScratchTTL)
 	}
 }
+
+func TestShutdownDrainDefaultFlagEnv(t *testing.T) {
+	c := Parse(nil, func(string) string { return "" })
+	if c.ShutdownDrain != 0 {
+		t.Errorf("default ShutdownDrain = %v, want 0", c.ShutdownDrain)
+	}
+	c = Parse([]string{"-shutdown-drain", "5s"}, func(string) string { return "" })
+	if c.ShutdownDrain != 5*time.Second {
+		t.Errorf("flag ShutdownDrain = %v, want 5s", c.ShutdownDrain)
+	}
+	c = Parse(nil, func(k string) string {
+		if k == "MAGISTER_SHUTDOWN_DRAIN" {
+			return "3s"
+		}
+		return ""
+	})
+	if c.ShutdownDrain != 3*time.Second {
+		t.Errorf("env ShutdownDrain = %v, want 3s", c.ShutdownDrain)
+	}
+}

@@ -123,6 +123,11 @@ func run(args []string, env func(string) string, stopCh <-chan struct{}, onListe
 	}
 
 	log.Info("shutting down")
+	srv.SetDraining(true) // /readyz → 503 so load balancers stop routing
+	if cfg.ShutdownDrain > 0 {
+		log.Info("draining", "grace", cfg.ShutdownDrain)
+		time.Sleep(cfg.ShutdownDrain)
+	}
 	sup.Shutdown(cfg.ShutdownTimeout) // cancel active runs first
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer cancel()

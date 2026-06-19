@@ -30,6 +30,9 @@ func ParseRemote(remoteURL string) (host, owner, repo string, err error) {
 			return "", "", "", fmt.Errorf("cannot parse remote %q", remoteURL)
 		}
 		host = rest[:slash]
+		if c := strings.IndexByte(host, ':'); c >= 0 {
+			host = host[:c] // drop an explicit :port (e.g. ssh://git@github.com:22/o/r)
+		}
 		owner, repo, err = splitOwnerRepo(rest[slash+1:])
 	case strings.Contains(s, "@") && strings.Contains(s, ":"):
 		hostPath := s[strings.IndexByte(s, '@')+1:]

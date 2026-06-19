@@ -117,3 +117,24 @@ func TestParseRemote(t *testing.T) {
 		}
 	}
 }
+
+func TestParseRemoteStripsPort(t *testing.T) {
+	cases := []struct {
+		url, owner, repo string
+		ok               bool
+	}{
+		{"ssh://git@github.com:22/test-owner/test-repo.git", "test-owner", "test-repo", true},
+		{"https://github.com:443/o/r.git", "o", "r", true},
+		{"ssh://git@gitlab.com:22/o/r.git", "", "", false}, // other host + port still rejected
+	}
+	for _, c := range cases {
+		_, owner, repo, err := ParseRemote(c.url)
+		if c.ok {
+			if err != nil || owner != c.owner || repo != c.repo {
+				t.Errorf("ParseRemote(%q) = %q/%q/%v, want %q/%q/nil", c.url, owner, repo, err, c.owner, c.repo)
+			}
+		} else if err == nil {
+			t.Errorf("ParseRemote(%q) = nil error, want unsupported-host error", c.url)
+		}
+	}
+}

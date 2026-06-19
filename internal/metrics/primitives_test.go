@@ -98,3 +98,37 @@ func TestCounterVecConcurrent(t *testing.T) {
 		t.Errorf("value = %v, want 5000", got)
 	}
 }
+
+func TestGaugeAddIncDec(t *testing.T) {
+	var g Gauge
+	g.Inc()
+	g.Inc()
+	g.Dec()
+	if got := g.value(); got != 1 {
+		t.Errorf("after inc,inc,dec = %v, want 1", got)
+	}
+	g.Add(2.5)
+	g.Add(-0.5)
+	if got := g.value(); got != 3 {
+		t.Errorf("after +2.5,-0.5 = %v, want 3", got)
+	}
+}
+
+func TestGaugeConcurrentBalanced(t *testing.T) {
+	var g Gauge
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 100; j++ {
+				g.Inc()
+				g.Dec()
+			}
+		}()
+	}
+	wg.Wait()
+	if got := g.value(); got != 0 {
+		t.Errorf("balanced inc/dec = %v, want 0", got)
+	}
+}

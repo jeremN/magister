@@ -38,6 +38,20 @@ type Gauge struct{ bits atomic.Uint64 }
 func (g *Gauge) Set(v float64)  { g.bits.Store(math.Float64bits(v)) }
 func (g *Gauge) value() float64 { return math.Float64frombits(g.bits.Load()) }
 
+// Add applies a signed delta (CAS loop); delta may be negative.
+func (g *Gauge) Add(delta float64) {
+	for {
+		old := g.bits.Load()
+		nv := math.Float64frombits(old) + delta
+		if g.bits.CompareAndSwap(old, math.Float64bits(nv)) {
+			return
+		}
+	}
+}
+
+func (g *Gauge) Inc() { g.Add(1) }
+func (g *Gauge) Dec() { g.Add(-1) }
+
 // Histogram observes samples into fixed ascending buckets. buckets[i] holds the
 // raw (non-cumulative) count of samples in (bounds[i-1], bounds[i]]; samples above
 // the top bound contribute only to count/sum (the implicit +Inf bucket). The

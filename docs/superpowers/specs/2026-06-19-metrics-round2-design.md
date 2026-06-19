@@ -64,7 +64,7 @@ Gauges use defer-based inc/dec (RAII) rather than pairing inc/dec with lifecycle
 
 - **metrics unit:** `Gauge.Add`/`Inc`/`Dec` correctness + a concurrent `-race` test (N goroutines inc then dec → final 0); labeled agent-counter render (`{agent="mock"}` series, sorted, escaped); gauge render present at 0.
 - **engine:** after a mock run completes, assert `magister_agent_cost_usd_total{agent="mock"}` is the expected sum, `magister_agent_tool_calls_total` renders per-agent, and `magister_runs_active` / `magister_steps_active` are back to `0` (gauges balanced — proves the defers fired).
-- **api:** drive a request through the real server; assert `magister_http_requests_in_flight` exists and reads `0` after the request returns (balanced).
+- **api:** drive one or more *completed* requests through the real server, then scrape `/metrics`; assert `magister_http_requests_in_flight` reads exactly `1`. The `/metrics` scrape itself passes through `metricsMiddleware`, so the gauge always counts the in-flight scrape (minimum 1) — standard Prometheus behavior, and consistent with round 1 already counting `/metrics` in `http_requests_total`. Reading exactly `1` (not 2+) proves the prior requests' inc/dec balanced with no leak.
 - Full `go test -race ./...` green; `go vet` + `gofmt` clean.
 
 ## Out of scope

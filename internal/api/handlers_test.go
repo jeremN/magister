@@ -42,7 +42,7 @@ func newServerOnly(t *testing.T) (*Server, *supervisor.Supervisor, core.Store) {
 	}
 	sup := supervisor.New(eng, st, reg)
 	t.Cleanup(func() { sup.Shutdown(time.Second) })
-	return &Server{Sup: sup, Store: st, Bus: bus, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), ShutdownTimeout: time.Second}, sup, st
+	return &Server{Sup: sup, Store: st, Bus: bus, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}, sup, st
 }
 
 func testServer(t *testing.T) (*httptest.Server, *supervisor.Supervisor, core.Store) {
@@ -222,13 +222,19 @@ func TestCreateRunWithRepoPinsBase(t *testing.T) {
 
 func TestGetRunSurfacesScratchPathForExternalRepo(t *testing.T) {
 	srv, _, st := newServerOnly(t)
-	srv.ScratchRoot = "/var/runs"
+	root := t.TempDir()
+	srv.ScratchRoot = root
 	hs := httptest.NewServer(srv.Router(""))
 	defer hs.Close()
 
 	if err := st.CreateRun(context.Background(), core.RunState{
 		ID: "r1", Name: "f", Status: core.RunSucceeded, Repo: "/abs/proj", Base: "abc",
 	}); err != nil {
+		t.Fatal(err)
+	}
+	// Create the scratch base dir so os.Stat gate passes.
+	scratchBase := filepath.Join(root, "r1", "base")
+	if err := os.MkdirAll(scratchBase, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	resp, err := http.Get(hs.URL + "/v1/runs/r1")
@@ -240,8 +246,8 @@ func TestGetRunSurfacesScratchPathForExternalRepo(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&snap); err != nil {
 		t.Fatalf("decode snapshot: %v", err)
 	}
-	if snap.Scratch != filepath.Join("/var/runs", "r1", "base") {
-		t.Errorf("scratch = %q, want /var/runs/r1/base", snap.Scratch)
+	if snap.Scratch != scratchBase {
+		t.Errorf("scratch = %q, want %q", snap.Scratch, scratchBase)
 	}
 }
 
@@ -301,7 +307,7 @@ func newGitServer(t *testing.T) (*httptest.Server, core.Store) {
 	}
 	sup := supervisor.New(eng, st, reg)
 	t.Cleanup(func() { sup.Shutdown(time.Second) })
-	srv := &Server{Sup: sup, Store: st, Bus: bus, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), ShutdownTimeout: time.Second}
+	srv := &Server{Sup: sup, Store: st, Bus: bus, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	hs := httptest.NewServer(srv.Router(""))
 	t.Cleanup(func() { hs.Close() })
 	return hs, st
@@ -422,6 +428,45 @@ steps:
     gate: { policy: auto, verifier: { command: "true" } }
 `
 
+func TestGetRunGatesScratchOnExistence(t *testing.T) {
+	st := store.NewMem()
+	ctx := context.Background()
+	if err := st.CreateRun(ctx, core.RunState{ID: "r1", Status: core.RunSucceeded, Repo: "/some/src"}); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	srv := &Server{Store: st, ScratchRoot: root, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	hs := httptest.NewServer(srv.Router(""))
+	defer hs.Close()
+
+	getScratch := func() string {
+		resp, err := http.Get(hs.URL + "/v1/runs/r1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var snap struct {
+			Scratch string `json:"scratch"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&snap); err != nil {
+			t.Fatal(err)
+		}
+		return snap.Scratch
+	}
+
+	// No scratch dir on disk yet → scratch omitted/empty.
+	if s := getScratch(); s != "" {
+		t.Errorf("scratch = %q, want empty when dir absent", s)
+	}
+	// Create the base dir → scratch now reported.
+	if err := os.MkdirAll(filepath.Join(root, "r1", "base"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if s := getScratch(); s == "" {
+		t.Error("scratch empty, want the base path when dir exists")
+	}
+}
+
 // ghAPIStub returns the absolute path to the shared fake-gh stub.
 func ghAPIStub(t *testing.T) string {
 	t.Helper()
@@ -465,7 +510,7 @@ func TestPREndpointOpensPR(t *testing.T) {
 			Artifacts: []core.Artifact{{StepID: "integrate", Branch: "step/integrate", Commit: "abc"}},
 		}},
 	})
-	srv := &Server{Sup: sup, Store: st, Bus: bus, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), ShutdownTimeout: time.Second}
+	srv := &Server{Sup: sup, Store: st, Bus: bus, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	hs := httptest.NewServer(srv.Router(""))
 	t.Cleanup(hs.Close)
 

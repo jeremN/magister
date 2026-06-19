@@ -23,8 +23,8 @@ func TestRouterMethodNotAllowed(t *testing.T) {
 func TestRouterAuthAppliesToV1(t *testing.T) {
 	// a server with a bearer token rejects unauthenticated /v1 calls
 	srv, _, _ := newServerOnly(t)
-	srv.BearerToken = "secret"
-	hs := httptest.NewServer(srv.Router(srv.BearerToken))
+	const token = "secret"
+	hs := httptest.NewServer(srv.Router(token))
 	defer hs.Close()
 	resp, _ := http.Get(hs.URL + "/v1/runs")
 	resp.Body.Close()

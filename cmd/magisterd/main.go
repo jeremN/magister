@@ -88,7 +88,7 @@ func run(args []string, env func(string) string, stopCh <-chan struct{}, onListe
 	defer stopJanitor()
 	go runScratchJanitor(janitorCtx, sup, cfg.ScratchTTL, cfg.ScratchSweepInterval, log)
 
-	srv := &api.Server{Sup: sup, Store: st, Bus: bus, Log: log, BearerToken: cfg.BearerToken, ShutdownTimeout: cfg.ShutdownTimeout, ScratchRoot: runsRoot}
+	srv := &api.Server{Sup: sup, Store: st, Bus: bus, Log: log, ScratchRoot: runsRoot}
 	httpSrv := &http.Server{
 		Handler:      srv.Router(cfg.BearerToken),
 		ReadTimeout:  15 * time.Second,

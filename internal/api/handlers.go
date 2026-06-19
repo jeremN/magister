@@ -6,8 +6,8 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"path/filepath"
-	"time"
 
 	"concentus/internal/core"
 	"concentus/internal/event"
@@ -20,12 +20,10 @@ const maxBodyBytes = 1 << 20 // 1 MiB flow uploads
 
 // Server holds the dependencies the HTTP handlers need.
 type Server struct {
-	Sup             *supervisor.Supervisor
-	Store           core.Store
-	Bus             *event.Bus
-	Log             *slog.Logger
-	BearerToken     string
-	ShutdownTimeout time.Duration
+	Sup   *supervisor.Supervisor
+	Store core.Store
+	Bus   *event.Bus
+	Log   *slog.Logger
 	// ScratchRoot is the per-run scratch repo root (= GitManager.Root). When set and
 	// a run targets a real repo, GET /v1/runs/{id} surfaces <root>/<id>/base so the
 	// caller can find the result history. Empty disables the field.
@@ -88,7 +86,10 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	}
 	scratch := ""
 	if rs.Repo != "" && s.ScratchRoot != "" {
-		scratch = filepath.Join(s.ScratchRoot, string(rs.ID), "base")
+		p := filepath.Join(s.ScratchRoot, string(rs.ID), "base")
+		if _, err := os.Stat(p); err == nil {
+			scratch = p // omit a reclaimed run's dead path
+		}
 	}
 	writeJSON(w, http.StatusOK, snapshotFromState(rs, scratch))
 }

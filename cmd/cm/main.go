@@ -30,7 +30,7 @@ func main() {
 
 func dispatch(args []string, base string, out io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(out, "usage: cm <run|ls|get|watch|approve|reject|cancel|push|pr> ...")
+		fmt.Fprintln(out, "usage: cm <run|ls|get|watch|approve|reject|cancel|push|pr|ship> ...")
 		return 2
 	}
 	c := &client{base: base, http: &http.Client{Timeout: 0}}
@@ -65,6 +65,8 @@ func dispatch(args []string, base string, out io.Writer) int {
 		return c.push(args[1:], out)
 	case "pr":
 		return c.pr(args[1:], out)
+	case "ship":
+		return c.ship(args[1:], out)
 	default:
 		fmt.Fprintf(out, "unknown command %q\n", args[0])
 		return 2
@@ -340,6 +342,65 @@ func (c *client) pr(args []string, out io.Writer) int {
 		return 1
 	}
 	fmt.Fprintln(out, "opened", pr.URL)
+	return 0
+}
+
+func (c *client) ship(args []string, out io.Writer) int {
+	var run string
+	body := map[string]any{}
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--draft":
+			body["draft"] = true
+		case "--force":
+			body["force"] = true
+		case "--remote", "--as", "--step", "--base", "--title", "--body":
+			flag := args[i]
+			i++
+			if i >= len(args) {
+				fmt.Fprintf(out, "usage: %s requires a value\n", flag)
+				return 2
+			}
+			body[flag[2:]] = args[i] // strip "--"
+		default:
+			run = args[i]
+		}
+	}
+	if run == "" {
+		fmt.Fprintln(out, "usage: cm ship <run> [--remote <url-or-name>] [--as <branch>] [--step <id>] [--base <branch>] [--title <t>] [--body <b>] [--draft] [--force]")
+		return 2
+	}
+	payload, _ := json.Marshal(body)
+	resp, err := c.http.Post(c.base+"/v1/runs/"+run+"/ship", "application/json", bytes.NewReader(payload))
+	if err != nil {
+		fmt.Fprintln(out, "ship:", err)
+		return 1
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return printErr(resp, out)
+	}
+	var sr struct {
+		Pushed struct {
+			Remote       string `json:"remote"`
+			Branch       string `json:"branch"`
+			SourceBranch string `json:"source_branch"`
+		} `json:"pushed"`
+		PR struct {
+			URL string `json:"url"`
+		} `json:"pr"`
+		PRExisted bool `json:"pr_existed"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&sr); err != nil {
+		fmt.Fprintln(out, "ship: decode response:", err)
+		return 1
+	}
+	fmt.Fprintf(out, "pushed %s → %s on %s\n", sr.Pushed.SourceBranch, sr.Pushed.Branch, sr.Pushed.Remote)
+	verb := "opened"
+	if sr.PRExisted {
+		verb = "exists"
+	}
+	fmt.Fprintln(out, verb, sr.PR.URL)
 	return 0
 }
 

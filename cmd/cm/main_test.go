@@ -225,3 +225,60 @@ func TestPRNon200PrintsError(t *testing.T) {
 		t.Errorf("output should surface the existing PR url, got %q", out.String())
 	}
 }
+
+func TestShipSendsJSONBodyAndPrintsOpened(t *testing.T) {
+	var got http.Request
+	var body []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = *r
+		body, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		writeBody(w, `{"pushed":{"remote":"git@h:o/r.git","branch":"magister/r1","source_branch":"step/integrate","commit":"abc"},"pr":{"url":"https://github.com/o/r/pull/4"},"pr_existed":false}`)
+	}))
+	defer srv.Close()
+
+	var out bytes.Buffer
+	code := dispatch([]string{"ship", "r1", "--as", "feature/x", "--force", "--title", "Hi"}, srv.URL, &out)
+	if code != 0 {
+		t.Fatalf("exit = %d, out=%s", code, out.String())
+	}
+	if got.Method != http.MethodPost || got.URL.Path != "/v1/runs/r1/ship" {
+		t.Errorf("request = %s %s, want POST /v1/runs/r1/ship", got.Method, got.URL.Path)
+	}
+	var sent map[string]any
+	if err := json.Unmarshal(body, &sent); err != nil {
+		t.Fatalf("body not json: %v", err)
+	}
+	if sent["as"] != "feature/x" || sent["force"] != true || sent["title"] != "Hi" {
+		t.Errorf("body = %v, want as/force/title set", sent)
+	}
+	s := out.String()
+	if !strings.Contains(s, "step/integrate") || !strings.Contains(s, "magister/r1") {
+		t.Errorf("output missing pushed line: %q", s)
+	}
+	if !strings.Contains(s, "opened https://github.com/o/r/pull/4") {
+		t.Errorf("output missing opened line: %q", s)
+	}
+}
+
+func TestShipPrintsExistsWhenPRExisted(t *testing.T) {
+	var got http.Request
+	srv := fakeAPI(t, http.StatusOK,
+		`{"pushed":{"remote":"r","branch":"magister/r1","source_branch":"step/integrate","commit":"abc"},"pr":{"url":"https://github.com/o/r/pull/9"},"pr_existed":true}`, &got)
+	defer srv.Close()
+	var out bytes.Buffer
+	if code := dispatch([]string{"ship", "r1"}, srv.URL, &out); code != 0 {
+		t.Fatalf("exit = %d, out=%s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "exists https://github.com/o/r/pull/9") {
+		t.Errorf("output should say 'exists' when pr_existed, got %q", out.String())
+	}
+}
+
+func TestShipRequiresRun(t *testing.T) {
+	var out bytes.Buffer
+	if code := dispatch([]string{"ship"}, "http://x", &out); code != 2 {
+		t.Errorf("exit = %d, want 2 (usage)", code)
+	}
+}

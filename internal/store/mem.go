@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"concentus/internal/core"
 	"concentus/internal/event"
@@ -15,16 +16,18 @@ import (
 var _ core.Store = (*Mem)(nil)
 
 type Mem struct {
-	mu     sync.Mutex
-	runs   map[core.RunID]*core.RunState
-	events map[core.RunID][]event.Event
-	seq    int64
+	mu        sync.Mutex
+	runs      map[core.RunID]*core.RunState
+	events    map[core.RunID][]event.Event
+	updatedAt map[core.RunID]time.Time
+	seq       int64
 }
 
 func NewMem() *Mem {
 	return &Mem{
-		runs:   make(map[core.RunID]*core.RunState),
-		events: make(map[core.RunID][]event.Event),
+		runs:      make(map[core.RunID]*core.RunState),
+		events:    make(map[core.RunID][]event.Event),
+		updatedAt: make(map[core.RunID]time.Time),
 	}
 }
 
@@ -36,6 +39,7 @@ func (m *Mem) CreateRun(_ context.Context, r core.RunState) error {
 	}
 	cp := r
 	m.runs[r.ID] = &cp
+	m.updatedAt[r.ID] = time.Now()
 	return nil
 }
 
@@ -74,6 +78,7 @@ func (m *Mem) SetRunStatus(_ context.Context, id core.RunID, status core.RunStat
 	}
 	r.Status = status
 	r.Err = errMsg
+	m.updatedAt[id] = time.Now()
 	return nil
 }
 
@@ -148,6 +153,25 @@ func (m *Mem) EventsSince(_ context.Context, id core.RunID, seq int64) ([]event.
 	for _, e := range m.events[id] {
 		if e.Seq > seq {
 			out = append(out, e)
+		}
+	}
+	return out, nil
+}
+
+func isTerminal(s core.RunStatus) bool {
+	return s == core.RunSucceeded || s == core.RunFailed || s == core.RunCanceled
+}
+
+func (m *Mem) ReclaimableRuns(_ context.Context, before time.Time) ([]core.RunID, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []core.RunID
+	for id, r := range m.runs {
+		if !isTerminal(r.Status) {
+			continue
+		}
+		if u, ok := m.updatedAt[id]; ok && u.Before(before) {
+			out = append(out, id)
 		}
 	}
 	return out, nil

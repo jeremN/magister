@@ -3,10 +3,60 @@ package store
 import (
 	"context"
 	"testing"
+	"time"
 
 	"concentus/internal/core"
 	"concentus/internal/event"
 )
+
+func sameRunIDSet(got, want []core.RunID) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	seen := make(map[core.RunID]bool, len(got))
+	for _, id := range got {
+		seen[id] = true
+	}
+	for _, id := range want {
+		if !seen[id] {
+			return false
+		}
+	}
+	return true
+}
+
+func TestMemReclaimableRuns(t *testing.T) {
+	st := NewMem()
+	ctx := context.Background()
+	mk := func(id core.RunID, status core.RunStatus) {
+		if err := st.CreateRun(ctx, core.RunState{ID: id, Status: core.RunPending}); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.SetRunStatus(ctx, id, status, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mk("done", core.RunSucceeded)
+	mk("failed", core.RunFailed)
+	mk("canceled", core.RunCanceled)
+	mk("active", core.RunRunning)
+
+	got, err := st.ReclaimableRuns(ctx, time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sameRunIDSet(got, []core.RunID{"done", "failed", "canceled"}) {
+		t.Errorf("future cutoff = %v, want the 3 terminal runs", got)
+	}
+
+	got, err = st.ReclaimableRuns(ctx, time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Errorf("past cutoff = %v, want none", got)
+	}
+}
 
 func TestMemRecordsTransitionsAndEvents(t *testing.T) {
 	ctx := context.Background()

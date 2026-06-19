@@ -280,6 +280,18 @@ func (s *SQLite) LoadIncompleteRuns(ctx context.Context) ([]core.RunState, error
 	return out, nil
 }
 
+func (s *SQLite) ReclaimableRuns(ctx context.Context, before time.Time) ([]core.RunID, error) {
+	ids, err := s.qr.ReclaimableRuns(ctx, before.UTC().Format("2006-01-02 15:04:05"))
+	if err != nil {
+		return nil, err
+	}
+	out := make([]core.RunID, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, core.RunID(id))
+	}
+	return out, nil
+}
+
 func (s *SQLite) EventsSince(ctx context.Context, id core.RunID, seq int64) ([]event.Event, error) {
 	rows, err := s.qr.EventsSince(ctx, sqldb.EventsSinceParams{RunID: string(id), Seq: seq})
 	if err != nil {

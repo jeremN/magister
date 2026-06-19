@@ -371,6 +371,33 @@ func (q *Queries) SetRunStatus(ctx context.Context, arg SetRunStatusParams) erro
 	return err
 }
 
+const reclaimableRuns = `-- name: ReclaimableRuns :many
+SELECT id FROM runs WHERE status IN ('succeeded', 'failed', 'canceled') AND updated_at < ? ORDER BY updated_at
+`
+
+func (q *Queries) ReclaimableRuns(ctx context.Context, updatedAt string) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, reclaimableRuns, updatedAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const upsertStep = `-- name: UpsertStep :exec
 INSERT INTO steps (run_id, id, status, attempt, summary, cost_usd, workdir, error)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?)

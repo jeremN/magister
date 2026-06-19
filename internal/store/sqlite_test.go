@@ -238,6 +238,39 @@ func TestRunRepoBaseRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSQLiteReclaimableRuns(t *testing.T) {
+	st := tempDB(t)
+	ctx := context.Background()
+
+	if err := st.CreateRun(ctx, core.RunState{ID: "done", Status: core.RunPending}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetRunStatus(ctx, "done", core.RunSucceeded, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CreateRun(ctx, core.RunState{ID: "active", Status: core.RunPending}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetRunStatus(ctx, "active", core.RunRunning, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := st.ReclaimableRuns(ctx, time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sameRunIDSet(got, []core.RunID{"done"}) {
+		t.Errorf("future cutoff = %v, want [done]", got)
+	}
+	got, err = st.ReclaimableRuns(ctx, time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Errorf("past cutoff = %v, want none", got)
+	}
+}
+
 func TestSQLiteLoadIncompleteRuns(t *testing.T) {
 	ctx := context.Background()
 	s := tempDB(t)

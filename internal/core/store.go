@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"time"
 
 	"concentus/internal/event"
 )
@@ -58,4 +59,8 @@ type Store interface {
 	GetRun(ctx context.Context, id RunID) (RunState, error)
 	ListRuns(ctx context.Context, f Filter) ([]RunSummary, error)
 	EventsSince(ctx context.Context, id RunID, seq int64) ([]event.Event, error)
+	// ReclaimableRuns returns the IDs of terminal runs (succeeded/failed/canceled)
+	// whose last update is strictly before the cutoff. The scratch janitor uses it to
+	// find runs whose scratch is past its retention TTL.
+	ReclaimableRuns(ctx context.Context, before time.Time) ([]RunID, error)
 }

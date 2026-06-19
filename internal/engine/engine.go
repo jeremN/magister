@@ -54,6 +54,12 @@ func (e *Engine) BasePath(runID core.RunID) string {
 	return e.WS.BasePath(runID)
 }
 
+// ReclaimScratch removes a run's scratch workspace. Delegates to the workspace; the
+// scratch janitor calls it after a run is terminal and past its retention TTL.
+func (e *Engine) ReclaimScratch(runID core.RunID) error {
+	return e.WS.Reclaim(runID)
+}
+
 // Run executes one flow to completion from scratch. The run row must already
 // exist in the store (the caller creates it); Run drives its status and all step
 // transitions. The first failing step cancels the run's context; the rest unwind.

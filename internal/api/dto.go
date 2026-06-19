@@ -73,6 +73,26 @@ type pushResponse struct {
 	Commit       string `json:"commit"`
 }
 
+// shipRequest is the JSON body of POST /v1/runs/{id}/ship: the union of pr's and
+// push's options. All fields optional.
+type shipRequest struct {
+	Remote string `json:"remote,omitempty"`
+	As     string `json:"as,omitempty"`
+	Step   string `json:"step,omitempty"`
+	Base   string `json:"base,omitempty"`
+	Title  string `json:"title,omitempty"`
+	Body   string `json:"body,omitempty"`
+	Draft  bool   `json:"draft,omitempty"`
+	Force  bool   `json:"force,omitempty"`
+}
+
+// shipResponse is returned from POST /v1/runs/{id}/ship.
+type shipResponse struct {
+	Pushed    pushResponse `json:"pushed"`
+	PR        prResponse   `json:"pr"`
+	PRExisted bool         `json:"pr_existed"`
+}
+
 // errorResponse is the uniform error envelope.
 type errorResponse struct {
 	Error string `json:"error"`

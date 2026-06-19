@@ -166,6 +166,42 @@ func (s *Server) handlePR(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) handleShip(w http.ResponseWriter, r *http.Request) {
+	var req shipRequest
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	res, err := s.Sup.Ship(r.Context(), core.RunID(r.PathValue("id")), supervisor.ShipOpts{
+		Remote: req.Remote, As: req.As, Step: req.Step, Base: req.Base,
+		Title: req.Title, Body: req.Body, Draft: req.Draft, Force: req.Force,
+	})
+	if err != nil {
+		var pushE *supervisor.PushError
+		if errors.As(err, &pushE) {
+			writeError(w, pushE.Status, pushE.Msg)
+			return
+		}
+		var prE *supervisor.PRError
+		if errors.As(err, &prE) {
+			writeError(w, prE.Status, prE.Msg)
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, shipResponse{
+		Pushed: pushResponse{
+			Remote:       res.Push.Remote,
+			Branch:       res.Push.Branch,
+			SourceBranch: res.Push.SourceBranch,
+			Commit:       res.Push.Commit,
+		},
+		PR:        prResponse{URL: res.PR.URL, Repo: res.PR.Repo, Head: res.PR.Head, Base: res.PR.Base, Draft: res.PR.Draft},
+		PRExisted: res.PRExisted,
+	})
+}
+
 func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }

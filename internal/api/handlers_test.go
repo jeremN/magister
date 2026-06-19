@@ -498,3 +498,69 @@ func TestPREndpointUnknownRun404(t *testing.T) {
 		t.Errorf("status = %d, want 404", resp.StatusCode)
 	}
 }
+
+func TestShipEndpointUnknownRun404(t *testing.T) {
+	hs, _, _ := testServer(t)
+	resp, err := http.Post(hs.URL+"/v1/runs/nope/ship", "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+func TestShipEndpointNonExternal400(t *testing.T) {
+	hs, _, st := testServer(t)
+	st.CreateRun(context.Background(), core.RunState{
+		ID: "r1", Status: core.RunSucceeded,
+		FlowYAML: "name: f\nsteps:\n  - id: a\n    agent: mock\n",
+	})
+	resp, err := http.Post(hs.URL+"/v1/runs/r1/ship", "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+// TestShipEndpointPropagatesPRErrorAfterPush: a real external-repo run with a local
+// bare origin → /ship pushes (branch lands on the bare) then the PR step fails to
+// parse the local origin as github → 400 from the *PRError, proving both the push
+// side-effect and the *PRError mapping path.
+func TestShipEndpointPropagatesPRErrorAfterPush(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	src, _ := setupAPISourceRepo(t)
+	bare := t.TempDir()
+	runGit(t, bare, "init", "--bare")
+	runGit(t, src, "remote", "add", "origin", bare)
+
+	hs, st := newGitServer(t)
+	resp, err := http.Post(hs.URL+"/v1/runs?repo="+url.QueryEscape(src)+"&base=HEAD",
+		"application/x-yaml", bytes.NewBufferString(extRepoFlowAPI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rr runResponse
+	json.NewDecoder(resp.Body).Decode(&rr)
+	resp.Body.Close()
+	waitForStatus(t, st, rr.ID, core.RunSucceeded)
+
+	sresp, err := http.Post(hs.URL+"/v1/runs/"+string(rr.ID)+"/ship", "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sresp.Body.Close()
+	if sresp.StatusCode != http.StatusBadRequest {
+		b, _ := io.ReadAll(sresp.Body)
+		t.Fatalf("ship = %d, want 400 (pr parse of local origin): %s", sresp.StatusCode, b)
+	}
+	if sha := runGit(t, bare, "rev-parse", "--verify", "magister/"+string(rr.ID)); sha == "" {
+		t.Error("push should have delivered magister/<run> before the pr step failed")
+	}
+}

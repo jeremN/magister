@@ -23,6 +23,7 @@ import (
 	"concentus/internal/executor"
 	"concentus/internal/gate"
 	"concentus/internal/join"
+	"concentus/internal/metrics"
 	"concentus/internal/store"
 	"concentus/internal/supervisor"
 	"concentus/internal/workspace"
@@ -69,6 +70,7 @@ func run(args []string, env func(string) string, stopCh <-chan struct{}, onListe
 
 	reg := supervisor.NewApprovalRegistry()
 	bus := event.NewBus()
+	mx := metrics.New(metrics.BuildVersion())
 	runsRoot := filepath.Join(filepath.Dir(cfg.DBPath), "runs")
 	eng := &engine.Engine{
 		Execs: agents(),
@@ -76,6 +78,7 @@ func run(args []string, env func(string) string, stopCh <-chan struct{}, onListe
 		Gate:  &gate.Evaluator{Approver: &supervisor.RegistryApprover{Reg: reg}, Verifier: gate.CommandVerifier{}},
 		Joins: join.Default(),
 		Store: st, Bus: bus, Clock: core.SystemClock{}, Log: log,
+		Metrics: mx,
 	}
 	sup := supervisor.New(eng, st, reg)
 	sup.Log = log
@@ -88,7 +91,7 @@ func run(args []string, env func(string) string, stopCh <-chan struct{}, onListe
 	defer stopJanitor()
 	go runScratchJanitor(janitorCtx, sup, cfg.ScratchTTL, cfg.ScratchSweepInterval, log)
 
-	srv := &api.Server{Sup: sup, Store: st, Bus: bus, Log: log, ScratchRoot: runsRoot}
+	srv := &api.Server{Sup: sup, Store: st, Bus: bus, Log: log, ScratchRoot: runsRoot, Metrics: mx}
 	httpSrv := &http.Server{
 		Handler:      srv.Router(cfg.BearerToken),
 		ReadTimeout:  15 * time.Second,

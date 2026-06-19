@@ -11,8 +11,9 @@ import (
 func (s *Server) Router(token string) http.Handler {
 	mux := http.NewServeMux()
 
-	// health is mounted outside the authed group
+	// health + metrics are mounted outside the authed group
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
+	mux.HandleFunc("GET /metrics", s.handleMetrics)
 
 	v1 := http.NewServeMux()
 	v1.HandleFunc("POST /v1/runs", s.handleCreateRun)
@@ -34,6 +35,7 @@ func (s *Server) Router(token string) http.Handler {
 	return chain(mux,
 		requestIDMiddleware,
 		loggingMiddleware(s.Log),
+		metricsMiddleware(s.Metrics, v1),
 		recoverMiddleware(s.Log),
 		securityHeaders,
 	)

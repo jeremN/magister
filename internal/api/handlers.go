@@ -12,6 +12,7 @@ import (
 	"concentus/internal/core"
 	"concentus/internal/event"
 	"concentus/internal/flow"
+	"concentus/internal/metrics"
 	"concentus/internal/supervisor"
 	"concentus/internal/workspace"
 )
@@ -28,6 +29,9 @@ type Server struct {
 	// a run targets a real repo, GET /v1/runs/{id} surfaces <root>/<id>/base so the
 	// caller can find the result history. Empty disables the field.
 	ScratchRoot string
+	// Metrics records HTTP + (via the engine) domain metrics; nil = no-op. Served at
+	// GET /metrics (auth-exempt).
+	Metrics *metrics.Metrics
 }
 
 func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
@@ -205,6 +209,11 @@ func (s *Server) handleShip(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	s.Metrics.WriteProm(w) // nil-safe: a nil registry writes nothing
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, v any) error {

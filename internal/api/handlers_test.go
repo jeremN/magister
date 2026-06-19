@@ -23,6 +23,7 @@ import (
 	"concentus/internal/gate"
 	"concentus/internal/host"
 	"concentus/internal/join"
+	"concentus/internal/metrics"
 	"concentus/internal/store"
 	"concentus/internal/supervisor"
 	"concentus/internal/workspace"
@@ -42,7 +43,7 @@ func newServerOnly(t *testing.T) (*Server, *supervisor.Supervisor, core.Store) {
 	}
 	sup := supervisor.New(eng, st, reg)
 	t.Cleanup(func() { sup.Shutdown(time.Second) })
-	return &Server{Sup: sup, Store: st, Bus: bus, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}, sup, st
+	return &Server{Sup: sup, Store: st, Bus: bus, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), Metrics: metrics.New("test")}, sup, st
 }
 
 func testServer(t *testing.T) (*httptest.Server, *supervisor.Supervisor, core.Store) {

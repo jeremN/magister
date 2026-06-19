@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/oklog/ulid/v2"
+
+	"concentus/internal/metrics"
 )
 
 type ctxKey int
@@ -129,4 +131,45 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, errorResponse{Error: msg})
+}
+
+// metricsMiddleware records request count + duration per request, labeled by the
+// matched route TEMPLATE (not the raw path) so cardinality stays bounded. routes is
+// the /v1 sub-mux, consulted via Handler(r) to resolve the template — http.Request.
+// Pattern is Go 1.23+ and unavailable here. Placed OUTSIDE recoverMiddleware so a
+// recovered panic is recorded as its 500 status.
+func metricsMiddleware(m *metrics.Metrics, routes *http.ServeMux) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			start := time.Now()
+			rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+			next.ServeHTTP(rec, r)
+			m.ObserveHTTP(r.Method, routeLabel(r, routes), rec.status, time.Since(start))
+		})
+	}
+}
+
+// routeLabel resolves a request to a bounded route-template label. /healthz and
+// /metrics are matched by path (they live on the outer mux); /v1 routes are resolved
+// via the v1 sub-mux's Handler; anything else is "unmatched".
+func routeLabel(r *http.Request, routes *http.ServeMux) string {
+	switch r.URL.Path {
+	case "/healthz":
+		return "/healthz"
+	case "/metrics":
+		return "/metrics"
+	}
+	if _, pattern := routes.Handler(r); pattern != "" {
+		return stripMethod(pattern)
+	}
+	return "unmatched"
+}
+
+// stripMethod drops a leading "METHOD " from a ServeMux pattern, e.g.
+// "GET /v1/runs/{id}" → "/v1/runs/{id}".
+func stripMethod(pattern string) string {
+	if i := strings.IndexByte(pattern, ' '); i >= 0 {
+		return pattern[i+1:]
+	}
+	return pattern
 }

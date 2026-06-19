@@ -22,6 +22,7 @@ func TestNilMetricsIsNoOp(t *testing.T) {
 	m.GateAwaited()
 	m.AgentTool("mock")
 	m.AddCost("mock", 1.5)
+	m.ObserveAgentRun("mock", time.Second)
 	m.RunStarted()
 	m.RunFinished()
 	m.StepStarted()
@@ -164,6 +165,28 @@ func TestAgentLabelAndGaugeBalance(t *testing.T) {
 		`magister_agent_cost_usd_total{agent="sonnet"} 0.02`,
 		`magister_agent_tool_calls_total{agent="opus"} 1`,
 		"magister_http_requests_in_flight 1", // 2 started, 1 finished
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("scrape missing %q\n---\n%s", want, out)
+		}
+	}
+}
+
+func TestAgentRunDurationHistogram(t *testing.T) {
+	m := New("v")
+	m.ObserveAgentRun("opus", 3*time.Second)   // lands in le="5"
+	m.ObserveAgentRun("opus", 700*time.Second) // > 600, <= 1200 → le="1200"
+	m.ObserveAgentRun("codex", 8*time.Second)  // distinct agent series
+	out := scrape(m)
+	for _, want := range []string{
+		"# TYPE magister_agent_run_duration_seconds histogram",
+		`magister_agent_run_duration_seconds_bucket{agent="opus",le="5"} 1`,
+		`magister_agent_run_duration_seconds_bucket{agent="opus",le="600"} 1`,
+		`magister_agent_run_duration_seconds_bucket{agent="opus",le="1200"} 2`,
+		`magister_agent_run_duration_seconds_bucket{agent="opus",le="+Inf"} 2`,
+		`magister_agent_run_duration_seconds_sum{agent="opus"} 703`,
+		`magister_agent_run_duration_seconds_count{agent="opus"} 2`,
+		`magister_agent_run_duration_seconds_count{agent="codex"} 1`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("scrape missing %q\n---\n%s", want, out)

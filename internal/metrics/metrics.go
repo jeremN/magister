@@ -22,8 +22,9 @@ type Metrics struct {
 	stepsTotal    *CounterVec // label: status
 	stepDuration  *Histogram
 	gatesAwaiting Counter
-	agentTools    *CounterVec // label: agent
-	agentCost     *CounterVec // label: agent
+	agentTools    *CounterVec   // label: agent
+	agentCost     *CounterVec   // label: agent
+	agentDuration *HistogramVec // label: agent
 
 	runsActive   Gauge
 	stepsActive  Gauge
@@ -34,24 +35,26 @@ type Metrics struct {
 }
 
 var (
-	runBuckets  = []float64{5, 30, 60, 300, 600, 1800, 3600}
-	stepBuckets = []float64{1, 5, 10, 30, 60, 120, 300, 600}
-	httpBuckets = []float64{.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10}
+	runBuckets      = []float64{5, 30, 60, 300, 600, 1800, 3600}
+	stepBuckets     = []float64{1, 5, 10, 30, 60, 120, 300, 600}
+	httpBuckets     = []float64{.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10}
+	agentDurBuckets = []float64{1, 5, 10, 30, 60, 120, 300, 600, 1200}
 )
 
 // New constructs the registry with its fixed metric families. version labels
 // magister_build_info.
 func New(version string) *Metrics {
 	return &Metrics{
-		version:      version,
-		runsTotal:    newCounterVec(),
-		runDuration:  newHistogram(runBuckets),
-		stepsTotal:   newCounterVec(),
-		stepDuration: newHistogram(stepBuckets),
-		agentTools:   newCounterVec(),
-		agentCost:    newCounterVec(),
-		httpRequests: newCounterVec(),
-		httpDuration: newHistogramVec(httpBuckets),
+		version:       version,
+		runsTotal:     newCounterVec(),
+		runDuration:   newHistogram(runBuckets),
+		stepsTotal:    newCounterVec(),
+		stepDuration:  newHistogram(stepBuckets),
+		agentTools:    newCounterVec(),
+		agentCost:     newCounterVec(),
+		agentDuration: newHistogramVec(agentDurBuckets),
+		httpRequests:  newCounterVec(),
+		httpDuration:  newHistogramVec(httpBuckets),
 	}
 }
 
@@ -120,6 +123,16 @@ func (m *Metrics) AddCost(agent string, usd float64) {
 		return
 	}
 	m.agentCost.Add(usd, agent)
+}
+
+// ObserveAgentRun records the wall-clock duration of one agent invocation,
+// labeled by registered agent name. Observed for every invocation (incl.
+// retries and join arbiters), even when the invocation returned an error.
+func (m *Metrics) ObserveAgentRun(agent string, d time.Duration) {
+	if m == nil {
+		return
+	}
+	m.agentDuration.Observe(d.Seconds(), agent)
 }
 
 // RunStarted/RunFinished bracket a run; the gauge reflects concurrent runs.
@@ -191,6 +204,7 @@ func (m *Metrics) WriteProm(w io.Writer) {
 	writeCounterRaw(w, "magister_gates_awaiting_total", "Total times a gate began awaiting manual approval.", m.gatesAwaiting.value())
 	writeCounterVec(w, "magister_agent_tool_calls_total", "Total agent tool-use milestones by agent.", []string{"agent"}, m.agentTools)
 	writeCounterVec(w, "magister_agent_cost_usd_total", "Total agent cost in USD by agent.", []string{"agent"}, m.agentCost)
+	writeHistogramVec(w, "magister_agent_run_duration_seconds", "Agent invocation wall-clock duration in seconds.", []string{"agent"}, m.agentDuration)
 	writeGauge(w, "magister_runs_active", "Runs currently executing.", m.runsActive.value())
 	writeGauge(w, "magister_steps_active", "Steps currently executing.", m.stepsActive.value())
 	writeGauge(w, "magister_http_requests_in_flight", "HTTP requests currently being served.", m.httpInFlight.value())

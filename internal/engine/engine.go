@@ -108,6 +108,8 @@ func (e *Engine) runDAG(parent context.Context, runID core.RunID, f *flow.Flow, 
 	}
 	e.Bus.Publish(runStartedEv)
 	runStart := e.Clock.Now()
+	e.Metrics.RunStarted()
+	defer e.Metrics.RunFinished()
 
 	// per-run cap (0 = unlimited within the global semaphore)
 	var perRun chan struct{}
@@ -188,6 +190,8 @@ func (e *Engine) runDAG(parent context.Context, runID core.RunID, f *flow.Flow, 
 			if ctx.Err() != nil {
 				return
 			}
+			e.Metrics.StepStarted()
+			defer e.Metrics.StepFinished()
 
 			// 4. run the step (execute + gate, with retries).
 			stepStart := e.Clock.Now()
@@ -199,7 +203,6 @@ func (e *Engine) runDAG(parent context.Context, runID core.RunID, f *flow.Flow, 
 				return
 			}
 			e.Metrics.ObserveStep("succeeded", stepDur)
-			e.Metrics.AddCost(res.CostUSD)
 			mu.Lock()
 			results[s.ID] = res
 			mu.Unlock()
@@ -370,7 +373,7 @@ func (e *Engine) runAgent(ctx context.Context, runID core.RunID, stepID, role, a
 	emit := func(ev event.Event) {
 		ev.RunID, ev.StepID, ev.Attempt, ev.At = string(runID), stepID, attemptNum, e.Clock.Now()
 		if ev.Kind == event.AgentTool {
-			e.Metrics.AgentTool()
+			e.Metrics.AgentTool(agentName)
 		}
 		if err := e.Store.AppendEvents(context.WithoutCancel(ctx), runID, []event.Event{ev}); err != nil {
 			e.logger().Error("append agent milestone", "run", runID, "step", stepID, "err", err)
@@ -378,7 +381,7 @@ func (e *Engine) runAgent(ctx context.Context, runID core.RunID, stepID, role, a
 		}
 		e.Bus.Publish(ev) // Seq is irrelevant on the bus — sse.go re-reads the store for real seqs
 	}
-	return ag.Run(ctx, core.Task{
+	res, err := ag.Run(ctx, core.Task{
 		RunID:   runID,
 		StepID:  stepID,
 		Role:    role,
@@ -387,6 +390,8 @@ func (e *Engine) runAgent(ctx context.Context, runID core.RunID, stepID, role, a
 		WorkDir: workDir,
 		Emit:    emit,
 	})
+	e.Metrics.AddCost(agentName, res.CostUSD) // per-invocation; no-op on 0 cost
+	return res, err
 }
 
 // execute runs the step's work: a join strategy for fan-in steps, otherwise the

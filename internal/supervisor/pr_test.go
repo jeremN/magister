@@ -208,3 +208,22 @@ func TestPRCreateFailureWithExistingBranchIs502(t *testing.T) {
 		t.Errorf("status = %d, want 502", got)
 	}
 }
+
+func TestPRCoreReportsExistingPR(t *testing.T) {
+	requireGitS(t)
+	st := store.NewMem()
+	sup := newPRSup(t, st)
+	t.Setenv("FAKE_GH_EXISTING_PR", "https://github.com/test-owner/test-repo/pull/8")
+	seedExtRun(t, st, "r1", srcWithGHOrigin(t, "https://github.com/test-owner/test-repo.git"))
+
+	res, existed, err := sup.prCore(context.Background(), "r1", PROpts{})
+	if err != nil {
+		t.Fatalf("prCore: %v", err)
+	}
+	if !existed {
+		t.Fatal("existed = false, want true")
+	}
+	if res.URL != "https://github.com/test-owner/test-repo/pull/8" {
+		t.Errorf("url = %q, want the existing PR url", res.URL)
+	}
+}

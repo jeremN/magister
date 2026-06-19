@@ -38,49 +38,47 @@ func prErr(status int, format string, a ...any) *PRError {
 	return &PRError{Status: status, Msg: fmt.Sprintf(format, a...)}
 }
 
-// PR opens a pull request on the host repo for a succeeded external-repo run. It is a
-// post-run, store-driven operation (engine untouched, no scratch clone): it reads the
-// run, derives owner/repo from the source remote, builds the PR metadata from store
-// data, and shells gh. The head branch is the push destination (magister/<runID> by
-// default), so the run must already have been pushed (cm push). Errors are *PRError
-// with an HTTP status (see the slice-3 spec).
-func (s *Supervisor) PR(ctx context.Context, runID core.RunID, opts PROpts) (PRResult, error) {
+// prCore does the PR work and reports whether an open PR already existed. On an
+// already-existing PR it returns (PRResult{URL:…}, true, nil); on a newly created
+// PR (PRResult{URL:…}, false, nil); on failure (PRResult{}, false, *PRError). It is
+// the shared core of PR (strict: existing→409) and Ship (idempotent: existing→ok).
+func (s *Supervisor) prCore(ctx context.Context, runID core.RunID, opts PROpts) (PRResult, bool, error) {
 	rs, err := s.store.GetRun(ctx, runID)
 	if err != nil {
 		// TODO: no store not-found sentinel; a genuine storage error reads as 404 (as in Push).
-		return PRResult{}, prErr(http.StatusNotFound, "unknown run %q", runID)
+		return PRResult{}, false, prErr(http.StatusNotFound, "unknown run %q", runID)
 	}
 	if rs.Repo == "" {
-		return PRResult{}, prErr(http.StatusBadRequest, "run %q is not an external-repo run (no --repo)", runID)
+		return PRResult{}, false, prErr(http.StatusBadRequest, "run %q is not an external-repo run (no --repo)", runID)
 	}
 	if rs.Status != core.RunSucceeded {
-		return PRResult{}, prErr(http.StatusConflict, "run %q is %s, not succeeded", runID, rs.Status)
+		return PRResult{}, false, prErr(http.StatusConflict, "run %q is %s, not succeeded", runID, rs.Status)
 	}
 	head := opts.As
 	if head == "" {
 		head = "magister/" + string(runID)
 	}
 	if !safePRRef(head) {
-		return PRResult{}, prErr(http.StatusBadRequest, "invalid head branch %q", head)
+		return PRResult{}, false, prErr(http.StatusBadRequest, "invalid head branch %q", head)
 	}
 	if opts.Base != "" && !safePRRef(opts.Base) {
-		return PRResult{}, prErr(http.StatusBadRequest, "invalid base branch %q", opts.Base)
+		return PRResult{}, false, prErr(http.StatusBadRequest, "invalid base branch %q", opts.Base)
 	}
 	remoteURL, err := workspace.ResolveRemote(rs.Repo, opts.Remote)
 	if err != nil {
-		return PRResult{}, prErr(http.StatusBadRequest, "remote: %v", err)
+		return PRResult{}, false, prErr(http.StatusBadRequest, "remote: %v", err)
 	}
 	_, owner, repo, err := host.ParseRemote(remoteURL)
 	if err != nil {
-		return PRResult{}, prErr(http.StatusBadRequest, "%v", err)
+		return PRResult{}, false, prErr(http.StatusBadRequest, "%v", err)
 	}
 	f, err := flow.ParseBytes([]byte(rs.FlowYAML))
 	if err != nil {
-		return PRResult{}, prErr(http.StatusInternalServerError, "parse stored flow: %v", err)
+		return PRResult{}, false, prErr(http.StatusInternalServerError, "parse stored flow: %v", err)
 	}
 	term, perr := pickResultStep(f, opts.Step)
 	if perr != nil {
-		return PRResult{}, prErr(perr.Status, "%s", perr.Msg)
+		return PRResult{}, false, prErr(perr.Status, "%s", perr.Msg)
 	}
 	title := opts.Title
 	if title == "" {
@@ -93,9 +91,9 @@ func (s *Supervisor) PR(ctx context.Context, runID core.RunID, opts PROpts) (PRR
 
 	runner := s.hostRunner()
 	if url, exists, err := runner.ExistingOpenPR(ctx, owner, repo, head); err != nil {
-		return PRResult{}, prErr(http.StatusBadGateway, "%v", err)
+		return PRResult{}, false, prErr(http.StatusBadGateway, "%v", err)
 	} else if exists {
-		return PRResult{}, prErr(http.StatusConflict, "PR already exists for %s: %s", head, url)
+		return PRResult{URL: url, Repo: owner + "/" + repo, Head: head, Base: opts.Base, Draft: opts.Draft}, true, nil
 	}
 
 	url, err := runner.CreatePR(ctx, host.CreateOpts{
@@ -104,11 +102,26 @@ func (s *Supervisor) PR(ctx context.Context, runID core.RunID, opts PROpts) (PRR
 	})
 	if err != nil {
 		if !runner.BranchExists(ctx, owner, repo, head) {
-			return PRResult{}, prErr(http.StatusConflict, "branch %q not on remote; run `cm push %s` first", head, runID)
+			return PRResult{}, false, prErr(http.StatusConflict, "branch %q not on remote; run `cm push %s` first", head, runID)
 		}
-		return PRResult{}, prErr(http.StatusBadGateway, "%v", err)
+		return PRResult{}, false, prErr(http.StatusBadGateway, "%v", err)
 	}
-	return PRResult{URL: url, Repo: owner + "/" + repo, Head: head, Base: opts.Base, Draft: opts.Draft}, nil
+	return PRResult{URL: url, Repo: owner + "/" + repo, Head: head, Base: opts.Base, Draft: opts.Draft}, false, nil
+}
+
+// PR opens a pull request on the host repo for a succeeded external-repo run. It is
+// a post-run, store-driven operation (engine untouched, no scratch clone). An
+// already-open PR for the head branch is a 409 carrying its URL. See the slice-3
+// spec; Ship reuses prCore for the idempotent variant.
+func (s *Supervisor) PR(ctx context.Context, runID core.RunID, opts PROpts) (PRResult, error) {
+	res, existed, err := s.prCore(ctx, runID, opts)
+	if err != nil {
+		return PRResult{}, err
+	}
+	if existed {
+		return PRResult{}, prErr(http.StatusConflict, "PR already exists for %s: %s", res.Head, res.URL)
+	}
+	return res, nil
 }
 
 // safePRRef guards a branch ref passed to gh (head/base): rejects empty, a leading

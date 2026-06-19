@@ -318,3 +318,10 @@ func TestSQLiteLoadIncompleteRuns(t *testing.T) {
 		t.Errorf("succeeded step's artifacts not loaded for resume: %+v", a)
 	}
 }
+
+func TestSQLitePing(t *testing.T) {
+	s := tempDB(t)
+	if err := s.Ping(context.Background()); err != nil {
+		t.Fatalf("SQLite.Ping = %v, want nil", err)
+	}
+}

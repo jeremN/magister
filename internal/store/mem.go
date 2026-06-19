@@ -176,3 +176,8 @@ func (m *Mem) ReclaimableRuns(_ context.Context, before time.Time) ([]core.RunID
 	}
 	return out, nil
 }
+
+// Ping always succeeds: the in-memory store is reachable whenever the process is.
+func (m *Mem) Ping(_ context.Context) error {
+	return nil
+}

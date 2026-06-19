@@ -63,4 +63,6 @@ type Store interface {
 	// whose last update is strictly before the cutoff. The scratch janitor uses it to
 	// find runs whose scratch is past its retention TTL.
 	ReclaimableRuns(ctx context.Context, before time.Time) ([]RunID, error)
+	// Ping verifies the store backend is reachable. The readiness probe uses it.
+	Ping(ctx context.Context) error
 }

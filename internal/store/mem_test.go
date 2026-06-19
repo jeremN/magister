@@ -165,3 +165,9 @@ func TestMemLoadIncompleteRuns(t *testing.T) {
 		}
 	}
 }
+
+func TestMemPing(t *testing.T) {
+	if err := NewMem().Ping(context.Background()); err != nil {
+		t.Fatalf("Mem.Ping = %v, want nil", err)
+	}
+}

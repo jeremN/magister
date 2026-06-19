@@ -317,3 +317,8 @@ func (s *SQLite) EventsSince(ctx context.Context, id core.RunID, seq int64) ([]e
 	}
 	return out, nil
 }
+
+// Ping verifies the database is reachable (readiness probe).
+func (s *SQLite) Ping(ctx context.Context) error {
+	return s.r.PingContext(ctx)
+}

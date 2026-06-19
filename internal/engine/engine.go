@@ -520,6 +520,7 @@ func (e *Engine) escalate(ctx context.Context, runID core.RunID, s *flow.Step, r
 	res.StepID = s.ID
 	e.transition(ctx, runID, stepState(runID, s.ID, core.StepAwaitingGate, attemptNum, workDir, res, gateErr),
 		event.Event{StepID: s.ID, Kind: event.GateAwaiting, Attempt: attemptNum, Err: gateErr.Error()})
+	e.Metrics.GateAwaited()
 
 	ok, err := e.Gate.Escalate(ctx, runID, s, res)
 	if err != nil {
@@ -550,6 +551,7 @@ func (e *Engine) escalateJoin(ctx context.Context, runID core.RunID, s *flow.Ste
 	}
 	e.transition(ctx, runID, stepState(runID, s.ID, core.StepAwaitingGate, attemptNum, workDir, core.Result{}, joinErr),
 		event.Event{StepID: s.ID, Kind: event.GateAwaiting, Attempt: attemptNum, Err: joinErr.Error()})
+	e.Metrics.GateAwaited()
 
 	ok, err := e.Gate.Escalate(ctx, runID, s, core.Result{})
 	if err != nil {
@@ -606,6 +608,7 @@ func (e *Engine) resolveConflictEscalation(ctx context.Context, runID core.RunID
 	// Rung 2: human reviews the resolution.
 	e.transition(ctx, runID, stepState(runID, s.ID, core.StepAwaitingGate, next, workDir, core.Result{}, conflict),
 		event.Event{StepID: s.ID, Kind: event.GateAwaiting, Attempt: next, Err: conflict.Error()})
+	e.Metrics.GateAwaited()
 	ok, err := e.Gate.Escalate(ctx, runID, s, core.Result{})
 	if err != nil {
 		e.transition(ctx, runID, stepState(runID, s.ID, core.StepFailed, next, workDir, core.Result{}, err),

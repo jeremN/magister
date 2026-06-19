@@ -21,6 +21,7 @@ import (
 	"concentus/internal/flow"
 	"concentus/internal/gate"
 	"concentus/internal/join"
+	"concentus/internal/metrics"
 )
 
 // Compile-time assertion: *event.Bus satisfies core.Publisher.
@@ -39,6 +40,8 @@ type Engine struct {
 	// Injected so backoff is deterministic in tests, mirroring Clock.
 	Rand func() float64
 	Log  *slog.Logger // non-fatal store/bus failures; nil = discard (M3 wires a real handler)
+	// Metrics records run/step/gate/agent counters and durations; nil = no-op.
+	Metrics *metrics.Metrics
 }
 
 // Provision records a run's source repo + pinned base SHA with the workspace
@@ -104,6 +107,7 @@ func (e *Engine) runDAG(parent context.Context, runID core.RunID, f *flow.Flow, 
 		e.logger().Error("append run started event", "run", runID, "err", err)
 	}
 	e.Bus.Publish(runStartedEv)
+	runStart := e.Clock.Now()
 
 	// per-run cap (0 = unlimited within the global semaphore)
 	var perRun chan struct{}
@@ -186,11 +190,16 @@ func (e *Engine) runDAG(parent context.Context, runID core.RunID, f *flow.Flow, 
 			}
 
 			// 4. run the step (execute + gate, with retries).
+			stepStart := e.Clock.Now()
 			res, err := e.runStep(ctx, runID, s, inputs)
+			stepDur := e.Clock.Now().Sub(stepStart)
 			if err != nil {
+				e.Metrics.ObserveStep("failed", stepDur)
 				fail(fmt.Errorf("step %q: %w", s.ID, err))
 				return
 			}
+			e.Metrics.ObserveStep("succeeded", stepDur)
+			e.Metrics.AddCost(res.CostUSD)
 			mu.Lock()
 			results[s.ID] = res
 			mu.Unlock()
@@ -217,6 +226,7 @@ func (e *Engine) runDAG(parent context.Context, runID core.RunID, f *flow.Flow, 
 			e.logger().Error("append run done event", "run", runID, "err", err)
 		}
 		e.Bus.Publish(runDoneEv)
+		e.Metrics.ObserveRun("canceled", e.Clock.Now().Sub(runStart))
 		return parent.Err()
 	case firstErr != nil:
 		if err := e.Store.SetRunStatus(final, runID, core.RunFailed, firstErr.Error()); err != nil {
@@ -227,6 +237,7 @@ func (e *Engine) runDAG(parent context.Context, runID core.RunID, f *flow.Flow, 
 			e.logger().Error("append run done event", "run", runID, "err", err)
 		}
 		e.Bus.Publish(runDoneEv)
+		e.Metrics.ObserveRun("failed", e.Clock.Now().Sub(runStart))
 		return firstErr
 	default:
 		if err := e.Store.SetRunStatus(final, runID, core.RunSucceeded, ""); err != nil {
@@ -237,6 +248,7 @@ func (e *Engine) runDAG(parent context.Context, runID core.RunID, f *flow.Flow, 
 			e.logger().Error("append run done event", "run", runID, "err", err)
 		}
 		e.Bus.Publish(runDoneEv)
+		e.Metrics.ObserveRun("succeeded", e.Clock.Now().Sub(runStart))
 		return nil
 	}
 }
@@ -259,6 +271,7 @@ func (e *Engine) runStep(ctx context.Context, runID core.RunID, s *flow.Step, in
 		if attempt > 1 {
 			e.transition(ctx, runID, stepState(runID, s.ID, core.StepRetrying, attempt, workDir, core.Result{}, lastErr),
 				event.Event{StepID: s.ID, Kind: event.StepRetrying, Attempt: attempt})
+			e.Metrics.StepRetried()
 			if !e.backoff(ctx, s, attempt) {
 				return core.Result{}, ctx.Err()
 			}
@@ -333,6 +346,7 @@ func (e *Engine) attempt(ctx context.Context, runID core.RunID, s *flow.Step, in
 	} else if gateBlocks(s) {
 		e.transition(ctx, runID, stepState(runID, s.ID, core.StepAwaitingGate, attemptNum, workDir, res, nil),
 			event.Event{StepID: s.ID, Kind: event.GateAwaiting, Attempt: attemptNum})
+		e.Metrics.GateAwaited()
 	}
 	ok, gerr := e.Gate.Evaluate(gateCtx, runID, s, res, workDir)
 	switch {
@@ -355,6 +369,9 @@ func (e *Engine) runAgent(ctx context.Context, runID core.RunID, stepID, role, a
 	}
 	emit := func(ev event.Event) {
 		ev.RunID, ev.StepID, ev.Attempt, ev.At = string(runID), stepID, attemptNum, e.Clock.Now()
+		if ev.Kind == event.AgentTool {
+			e.Metrics.AgentTool()
+		}
 		if err := e.Store.AppendEvents(context.WithoutCancel(ctx), runID, []event.Event{ev}); err != nil {
 			e.logger().Error("append agent milestone", "run", runID, "step", stepID, "err", err)
 			return

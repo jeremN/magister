@@ -84,6 +84,10 @@ func run(args []string, env func(string) string, stopCh <-chan struct{}, onListe
 		log.Error("resume incomplete runs", "err", err)
 	}
 
+	janitorCtx, stopJanitor := context.WithCancel(context.Background())
+	defer stopJanitor()
+	go runScratchJanitor(janitorCtx, sup, cfg.ScratchTTL, cfg.ScratchSweepInterval, log)
+
 	srv := &api.Server{Sup: sup, Store: st, Bus: bus, Log: log, BearerToken: cfg.BearerToken, ShutdownTimeout: cfg.ShutdownTimeout, ScratchRoot: runsRoot}
 	httpSrv := &http.Server{
 		Handler:      srv.Router(cfg.BearerToken),
@@ -120,4 +124,34 @@ func run(args []string, env func(string) string, stopCh <-chan struct{}, onListe
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer cancel()
 	return httpSrv.Shutdown(shutdownCtx)
+}
+
+// runScratchJanitor periodically reclaims the scratch of terminal runs past the
+// retention TTL. A non-positive ttl disables it. It runs until ctx is canceled.
+func runScratchJanitor(ctx context.Context, sup *supervisor.Supervisor, ttl, interval time.Duration, log *slog.Logger) {
+	if ttl <= 0 {
+		log.Info("scratch janitor disabled", "scratch_ttl", ttl)
+		return
+	}
+	sweep := func() {
+		n, err := sup.SweepScratch(ctx, time.Now().Add(-ttl))
+		if err != nil {
+			log.Error("scratch sweep", "err", err)
+			return
+		}
+		if n > 0 {
+			log.Info("scratch reclaimed", "runs", n)
+		}
+	}
+	sweep() // immediate boot sweep (reclaims anything already past TTL from a prior process)
+	tk := time.NewTicker(interval)
+	defer tk.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tk.C:
+			sweep()
+		}
+	}
 }

@@ -1,6 +1,9 @@
 package main
 
 import (
+	"context"
+	"io"
+	"log/slog"
 	"net/http"
 	"path/filepath"
 	"testing"
@@ -39,6 +42,21 @@ func TestRunServesHealthzAndShutsDown(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("daemon did not shut down")
+	}
+}
+
+func TestRunScratchJanitorDisabledReturns(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	done := make(chan struct{})
+	go func() {
+		// ttl <= 0 disables the janitor; it must return without touching sup (nil here).
+		runScratchJanitor(context.Background(), nil, 0, time.Hour, log)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("disabled janitor did not return")
 	}
 }
 

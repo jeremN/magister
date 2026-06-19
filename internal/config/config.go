@@ -10,10 +10,12 @@ import (
 )
 
 type Config struct {
-	Addr            string
-	DBPath          string
-	BearerToken     string
-	ShutdownTimeout time.Duration
+	Addr                 string
+	DBPath               string
+	BearerToken          string
+	ShutdownTimeout      time.Duration
+	ScratchTTL           time.Duration
+	ScratchSweepInterval time.Duration
 }
 
 // Parse builds a Config from args (nil = none) and an env lookup (e.g. os.Getenv).
@@ -25,6 +27,8 @@ func Parse(args []string, env func(string) string) Config {
 	fs.StringVar(&c.Addr, "addr", "127.0.0.1:8080", "listen address (loopback by default)")
 	fs.StringVar(&c.DBPath, "db", "magister.db", "SQLite database path")
 	fs.DurationVar(&c.ShutdownTimeout, "shutdown-timeout", 10*time.Second, "graceful shutdown deadline")
+	fs.DurationVar(&c.ScratchTTL, "scratch-ttl", 24*time.Hour, "reclaim a terminal run's scratch this long after it finishes (0 disables)")
+	fs.DurationVar(&c.ScratchSweepInterval, "scratch-sweep-interval", time.Hour, "how often the scratch janitor sweeps")
 	_ = fs.Parse(args)
 
 	c.BearerToken = env("MAGISTER_BEARER_TOKEN")
@@ -33,6 +37,11 @@ func Parse(args []string, env func(string) string) Config {
 	}
 	if v := env("MAGISTER_DB"); v != "" && !flagSet(fs, "db") {
 		c.DBPath = v
+	}
+	if v := env("MAGISTER_SCRATCH_TTL"); v != "" && !flagSet(fs, "scratch-ttl") {
+		if d, err := time.ParseDuration(v); err == nil {
+			c.ScratchTTL = d
+		}
 	}
 	return c
 }

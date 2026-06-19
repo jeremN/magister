@@ -40,3 +40,33 @@ func TestEnvSuppliesBearer(t *testing.T) {
 		t.Errorf("bearer from env not applied: %q", c.BearerToken)
 	}
 }
+
+func TestParseScratchDefaults(t *testing.T) {
+	c := Parse(nil, func(string) string { return "" })
+	if c.ScratchTTL != 24*time.Hour {
+		t.Errorf("ScratchTTL = %v, want 24h", c.ScratchTTL)
+	}
+	if c.ScratchSweepInterval != time.Hour {
+		t.Errorf("ScratchSweepInterval = %v, want 1h", c.ScratchSweepInterval)
+	}
+}
+
+func TestParseScratchFlagsAndEnv(t *testing.T) {
+	c := Parse([]string{"-scratch-ttl=1h", "-scratch-sweep-interval=5m"}, func(string) string { return "" })
+	if c.ScratchTTL != time.Hour {
+		t.Errorf("ScratchTTL flag = %v, want 1h", c.ScratchTTL)
+	}
+	if c.ScratchSweepInterval != 5*time.Minute {
+		t.Errorf("ScratchSweepInterval flag = %v, want 5m", c.ScratchSweepInterval)
+	}
+
+	c = Parse(nil, func(k string) string {
+		if k == "MAGISTER_SCRATCH_TTL" {
+			return "2h"
+		}
+		return ""
+	})
+	if c.ScratchTTL != 2*time.Hour {
+		t.Errorf("ScratchTTL env = %v, want 2h", c.ScratchTTL)
+	}
+}

@@ -4,7 +4,7 @@
 
 ## State (verified)
 
-- `main` at `8c4b16e`, working tree clean. **Local-only — NOT pushed to `origin` (github.com/jeremN/magister).** `origin/main` is still at `8f82b01` (the delivery-polish push); this slice's plan commit + 6 branch commits are local. Push when ready: `git push origin main`.
+- `main` at `ebfb02a`, working tree clean. **Pushed to `origin` (github.com/jeremN/magister) 2026-06-19** — `origin/main == ebfb02a` (verified via `git ls-remote`). (`8c4b16e` is the last code commit; `ebfb02a` is this handoff doc.)
 - `go test -race ./...` → **285 passed across 16 packages** (was 285 at slice start; net test count is flat because the slice ADDED tests but the count shown is the suite's reported total — the new tests are real: `TestGitManager/Manager Reclaim*`, `TestMem/SQLiteReclaimableRuns`, `TestSweepScratch*` incl. the second-sweep-returns-0 regression, `TestParseScratch*`, `TestRunScratchJanitorDisabledReturns`, `TestGetRunGatesScratchOnExistence`). `go vet ./...` clean. `gofmt -l` clean. `go 1.22`. **No new deps, no DB migration.**
 - Built via brainstorm → writing-plans → subagent-driven-development in a worktree (`.worktrees/scratch-gc`, now removed): fresh sonnet implementer per task → spec+quality review each → **Opus final whole-branch review: Ready to merge, zero Critical/Important**. Spec: `docs/superpowers/specs/2026-06-19-scratch-gc-design.md`; plan: `docs/superpowers/plans/2026-06-19-scratch-gc.md`.
 
@@ -35,7 +35,7 @@ Mock external-repo flow (`flows/external-repo.yaml`, zero-cost, no network) agai
 
 ## Carried follow-ups (non-blocking, none in flight)
 
-- **Push `main` to origin** — slice merged locally; `origin/main` still at `8f82b01`. `git push origin main` when ready.
+- ~~**Push `main` to origin**~~ — DONE 2026-06-19 (`origin/main == ebfb02a`).
 - **Orphan scratch dirs** (a dir with no run row, e.g. after a hard crash) are NOT swept — the janitor is store-driven only. A later filesystem-walk-by-mtime pass could add it. (Spec out-of-scope.)
 - **On-demand reclaim** (`cm gc` / `cm rm <run>`) — deferred; the background janitor is the only trigger in v1. (Spec out-of-scope.)
 - **DB-row GC** — `runs`/`events`/`steps` rows persist indefinitely; this slice reclaims only on-disk scratch. The store-driven janitor re-stats each terminal run every sweep forever (cheap: one stat syscall each, no log noise after the fix), but it never stops re-selecting them — a `reclaimed_at` marker would need a migration (deliberately out of scope). Acceptable for v1; revisit with DB-row GC.

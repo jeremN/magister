@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"concentus/internal/core"
@@ -88,6 +89,35 @@ func (m *GitManager) specFor(runID core.RunID) repoSpec {
 
 func (m *GitManager) baseDir(id core.RunID) string { return filepath.Join(m.Root, string(id), "base") }
 func (m *GitManager) wtDir(id core.RunID) string   { return filepath.Join(m.Root, string(id), "wt") }
+func (m *GitManager) runDir(id core.RunID) string  { return filepath.Join(m.Root, string(id)) }
+
+// safeRunID reports whether id is a clean, non-empty single path segment, so
+// filepath.Join(Root, id) stays strictly under Root. It guards Reclaim's RemoveAll
+// against an empty or ".."/separator id escaping to Root or a parent directory.
+func safeRunID(id core.RunID) bool {
+	s := string(id)
+	if s == "" || s == "." || s == ".." {
+		return false
+	}
+	if strings.ContainsRune(s, '/') || strings.ContainsRune(s, filepath.Separator) {
+		return false
+	}
+	return filepath.Base(s) == s
+}
+
+// Reclaim removes the run's entire scratch directory (base repo + worktrees). It
+// takes the run lock (like TeardownRun) and is idempotent: a missing directory is
+// not an error. Refuses an unsafe runID so an empty/".." id can never RemoveAll the
+// runs root.
+func (m *GitManager) Reclaim(runID core.RunID) error {
+	if !safeRunID(runID) {
+		return fmt.Errorf("refusing to reclaim unsafe run id %q", runID)
+	}
+	lock := m.runLock(runID)
+	lock.Lock()
+	defer lock.Unlock()
+	return os.RemoveAll(m.runDir(runID))
+}
 
 // BasePath exposes the per-run base repo path for post-run delivery (push).
 func (m *GitManager) BasePath(runID core.RunID) string { return m.baseDir(runID) }

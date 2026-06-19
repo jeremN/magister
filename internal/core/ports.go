@@ -68,6 +68,10 @@ type Workspace interface {
 	// TeardownRun removes the run's isolated worktrees (the base repo persists). It
 	// is best-effort, idempotent, and a no-op for a run with no worktrees.
 	TeardownRun(runID RunID) error
+	// Reclaim removes the run's entire scratch directory (base repo + worktrees).
+	// Best-effort and idempotent: a missing directory is not an error. The scratch
+	// janitor calls it once a run is terminal and past its retention TTL.
+	Reclaim(runID RunID) error
 }
 
 // Publisher receives engine events for live observers. Lossy by contract.

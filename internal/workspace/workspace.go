@@ -4,6 +4,7 @@
 package workspace
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -33,6 +34,15 @@ func (m *Manager) Provision(core.RunID, string, string) error { return nil }
 // this is informational; push only targets GitManager-backed external-repo runs.
 func (m *Manager) BasePath(runID core.RunID) string {
 	return filepath.Join(m.Root, string(runID))
+}
+
+// Reclaim removes the run's scratch directory. Mirrors GitManager.Reclaim with the
+// same safety guard; the plain Manager allocates plain dirs under Root.
+func (m *Manager) Reclaim(runID core.RunID) error {
+	if !safeRunID(runID) {
+		return fmt.Errorf("refusing to reclaim unsafe run id %q", runID)
+	}
+	return os.RemoveAll(filepath.Join(m.Root, string(runID)))
 }
 
 func (m *Manager) For(runID core.RunID, s *flow.Step) (string, func() error, error) {

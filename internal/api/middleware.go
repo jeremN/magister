@@ -100,7 +100,13 @@ func timeoutMiddleware(d time.Duration) func(http.Handler) http.Handler {
 				next.ServeHTTP(w, r)
 				return
 			}
-			ctx, cancel := context.WithTimeout(r.Context(), d)
+			timeout := d
+			// Delivery operations shell out to git/gh over the network; give them a
+			// longer bound than ordinary requests, but still bound them.
+			if p := r.URL.Path; strings.HasSuffix(p, "/push") || strings.HasSuffix(p, "/pr") || strings.HasSuffix(p, "/ship") {
+				timeout = 120 * time.Second
+			}
+			ctx, cancel := context.WithTimeout(r.Context(), timeout)
 			defer cancel()
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})

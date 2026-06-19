@@ -381,6 +381,7 @@ func (e *Engine) runAgent(ctx context.Context, runID core.RunID, stepID, role, a
 		}
 		e.Bus.Publish(ev) // Seq is irrelevant on the bus — sse.go re-reads the store for real seqs
 	}
+	agentStart := e.Clock.Now()
 	res, err := ag.Run(ctx, core.Task{
 		RunID:   runID,
 		StepID:  stepID,
@@ -390,7 +391,8 @@ func (e *Engine) runAgent(ctx context.Context, runID core.RunID, stepID, role, a
 		WorkDir: workDir,
 		Emit:    emit,
 	})
-	e.Metrics.AddCost(agentName, res.CostUSD) // per-invocation; no-op on 0 cost
+	e.Metrics.ObserveAgentRun(agentName, e.Clock.Now().Sub(agentStart)) // every invocation, incl. errors
+	e.Metrics.AddCost(agentName, res.CostUSD)                           // per-invocation; no-op on 0 cost
 	return res, err
 }
 

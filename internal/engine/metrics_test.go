@@ -50,9 +50,10 @@ func TestEngineRecordsMetrics(t *testing.T) {
 		`magister_steps_total{status="succeeded"} 1`,
 		"magister_run_duration_seconds_count 1",
 		"magister_step_duration_seconds_count 1",
-		`magister_agent_cost_usd_total{agent="mock"}`, // mock has nonzero cost → labeled series exists
-		"magister_runs_active 0",                      // balanced: defer RunFinished fired
-		"magister_steps_active 0",                     // balanced: defer StepFinished fired
+		`magister_agent_cost_usd_total{agent="mock"}`,               // mock has nonzero cost → labeled series exists
+		"magister_runs_active 0",                                    // balanced: defer RunFinished fired
+		"magister_steps_active 0",                                   // balanced: defer StepFinished fired
+		`magister_agent_run_duration_seconds_count{agent="mock"} 1`, // one mock invocation observed
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("metrics missing %q\n---\n%s", want, out)

@@ -105,18 +105,30 @@ func safeRunID(id core.RunID) bool {
 	return filepath.Base(s) == s
 }
 
-// Reclaim removes the run's entire scratch directory (base repo + worktrees). It
-// takes the run lock (like TeardownRun) and is idempotent: a missing directory is
-// not an error. Refuses an unsafe runID so an empty/".." id can never RemoveAll the
-// runs root.
-func (m *GitManager) Reclaim(runID core.RunID) error {
+// Reclaim removes the run's entire scratch directory (base repo + worktrees) and
+// reports whether a directory was actually removed. It takes the run lock (like
+// TeardownRun) and is idempotent: a missing directory returns (false, nil), so the
+// store-driven janitor, which keeps re-selecting an already-reclaimed terminal run,
+// does no real work and reports nothing on subsequent sweeps. Refuses an unsafe
+// runID so an empty/".." id can never RemoveAll the runs root.
+func (m *GitManager) Reclaim(runID core.RunID) (bool, error) {
 	if !safeRunID(runID) {
-		return fmt.Errorf("refusing to reclaim unsafe run id %q", runID)
+		return false, fmt.Errorf("refusing to reclaim unsafe run id %q", runID)
 	}
 	lock := m.runLock(runID)
 	lock.Lock()
 	defer lock.Unlock()
-	return os.RemoveAll(m.runDir(runID))
+	dir := m.runDir(runID)
+	if _, err := os.Stat(dir); err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // BasePath exposes the per-run base repo path for post-run delivery (push).

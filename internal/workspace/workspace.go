@@ -36,13 +36,25 @@ func (m *Manager) BasePath(runID core.RunID) string {
 	return filepath.Join(m.Root, string(runID))
 }
 
-// Reclaim removes the run's scratch directory. Mirrors GitManager.Reclaim with the
-// same safety guard; the plain Manager allocates plain dirs under Root.
-func (m *Manager) Reclaim(runID core.RunID) error {
+// Reclaim removes the run's scratch directory and reports whether a directory was
+// actually removed. Mirrors GitManager.Reclaim with the same safety guard and the
+// same idempotent (false, nil) for a missing dir; the plain Manager allocates plain
+// dirs under Root.
+func (m *Manager) Reclaim(runID core.RunID) (bool, error) {
 	if !safeRunID(runID) {
-		return fmt.Errorf("refusing to reclaim unsafe run id %q", runID)
+		return false, fmt.Errorf("refusing to reclaim unsafe run id %q", runID)
 	}
-	return os.RemoveAll(filepath.Join(m.Root, string(runID)))
+	dir := filepath.Join(m.Root, string(runID))
+	if _, err := os.Stat(dir); err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (m *Manager) For(runID core.RunID, s *flow.Step) (string, func() error, error) {

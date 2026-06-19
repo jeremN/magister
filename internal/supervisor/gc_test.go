@@ -51,4 +51,16 @@ func TestSweepScratchReclaimsTerminalAgedRuns(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, "active")); err != nil {
 		t.Errorf("active scratch wrongly reclaimed: %v", err)
 	}
+
+	// A second sweep re-selects the same terminal+aged runs from the store (they
+	// stay terminal forever), but their directories are already gone, so it removes
+	// nothing and reports 0. This keeps the janitor's count and log honest instead of
+	// claiming a reclaim on every sweep.
+	n, err = sup.SweepScratch(ctx, time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatalf("second SweepScratch: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("second sweep reclaimed = %d, want 0 (dirs already gone)", n)
+	}
 }

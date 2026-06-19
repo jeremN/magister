@@ -23,15 +23,23 @@ func TestGitManagerReclaimRemovesRunScratch(t *testing.T) {
 	mkdirAll(t, filepath.Join(runDir, "base"))
 	mkdirAll(t, filepath.Join(runDir, "wt", "stepA"))
 
-	if err := m.Reclaim("run1"); err != nil {
+	removed, err := m.Reclaim("run1")
+	if err != nil {
 		t.Fatalf("Reclaim: %v", err)
+	}
+	if !removed {
+		t.Errorf("Reclaim removed=false, want true (a populated scratch was deleted)")
 	}
 	if _, err := os.Stat(runDir); !os.IsNotExist(err) {
 		t.Errorf("run dir still present: %v", err)
 	}
-	// idempotent: a second reclaim of a missing dir is not an error
-	if err := m.Reclaim("run1"); err != nil {
+	// idempotent: a second reclaim of a missing dir is not an error and removes nothing
+	removed, err = m.Reclaim("run1")
+	if err != nil {
 		t.Errorf("second Reclaim: %v", err)
+	}
+	if removed {
+		t.Errorf("second Reclaim removed=true, want false (dir already gone)")
 	}
 }
 
@@ -42,8 +50,8 @@ func TestGitManagerReclaimRejectsUnsafeID(t *testing.T) {
 	m := &workspace.GitManager{Root: root}
 
 	for _, id := range []core.RunID{"", ".", "..", "a/b", "../keep"} {
-		if err := m.Reclaim(id); err == nil {
-			t.Errorf("Reclaim(%q) = nil, want error", id)
+		if removed, err := m.Reclaim(id); err == nil || removed {
+			t.Errorf("Reclaim(%q) = (%v, %v), want (false, error)", id, removed, err)
 		}
 	}
 	if _, err := os.Stat(sentinel); err != nil {
@@ -58,13 +66,21 @@ func TestManagerReclaimRemovesRunDir(t *testing.T) {
 	root := t.TempDir()
 	m := &workspace.Manager{Root: root}
 	mkdirAll(t, filepath.Join(root, "run9", "stepX"))
-	if err := m.Reclaim("run9"); err != nil {
+	removed, err := m.Reclaim("run9")
+	if err != nil {
 		t.Fatalf("Reclaim: %v", err)
+	}
+	if !removed {
+		t.Errorf("Reclaim removed=false, want true")
 	}
 	if _, err := os.Stat(filepath.Join(root, "run9")); !os.IsNotExist(err) {
 		t.Errorf("run dir still present")
 	}
-	if err := m.Reclaim(".."); err == nil {
-		t.Errorf("Reclaim(\"..\") = nil, want error")
+	// idempotent: a second reclaim of the now-missing dir removes nothing
+	if removed, err := m.Reclaim("run9"); err != nil || removed {
+		t.Errorf("second Reclaim(\"run9\") = (%v, %v), want (false, nil)", removed, err)
+	}
+	if removed, err := m.Reclaim(".."); err == nil || removed {
+		t.Errorf("Reclaim(\"..\") = (%v, %v), want (false, error)", removed, err)
 	}
 }

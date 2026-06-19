@@ -54,9 +54,10 @@ func (e *Engine) BasePath(runID core.RunID) string {
 	return e.WS.BasePath(runID)
 }
 
-// ReclaimScratch removes a run's scratch workspace. Delegates to the workspace; the
-// scratch janitor calls it after a run is terminal and past its retention TTL.
-func (e *Engine) ReclaimScratch(runID core.RunID) error {
+// ReclaimScratch removes a run's scratch workspace and reports whether a directory
+// was actually removed. Delegates to the workspace; the scratch janitor calls it
+// after a run is terminal and past its retention TTL.
+func (e *Engine) ReclaimScratch(runID core.RunID) (bool, error) {
 	return e.WS.Reclaim(runID)
 }
 

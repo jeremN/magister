@@ -160,6 +160,8 @@ func routeLabel(r *http.Request, routes *http.ServeMux) string {
 		return "/healthz"
 	case "/metrics":
 		return "/metrics"
+	case "/readyz":
+		return "/readyz"
 	}
 	if _, pattern := routes.Handler(r); pattern != "" {
 		return stripMethod(pattern)

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -8,6 +9,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync/atomic"
+	"time"
 
 	"concentus/internal/core"
 	"concentus/internal/event"
@@ -32,6 +35,9 @@ type Server struct {
 	// Metrics records HTTP + (via the engine) domain metrics; nil = no-op. Served at
 	// GET /metrics (auth-exempt).
 	Metrics *metrics.Metrics
+	// draining is set true at shutdown so /readyz returns 503 while liveness
+	// (/healthz) stays 200. Zero value = not draining.
+	draining atomic.Bool
 }
 
 func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
@@ -209,6 +215,24 @@ func (s *Server) handleShip(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// SetDraining flips the readiness state. After SetDraining(true), /readyz returns 503
+// while /healthz (liveness) stays 200. The daemon calls it at graceful shutdown.
+func (s *Server) SetDraining(v bool) { s.draining.Store(v) }
+
+func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
+	if s.draining.Load() {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "draining"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+	if err := s.Store.Ping(ctx); err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "store unreachable"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 }
 
 func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {

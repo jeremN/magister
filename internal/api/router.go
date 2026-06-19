@@ -14,6 +14,7 @@ func (s *Server) Router(token string) http.Handler {
 	// health + metrics are mounted outside the authed group
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /metrics", s.handleMetrics)
+	mux.HandleFunc("GET /readyz", s.handleReadyz)
 
 	v1 := http.NewServeMux()
 	v1.HandleFunc("POST /v1/runs", s.handleCreateRun)

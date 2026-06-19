@@ -72,3 +72,17 @@ func scrapeMetrics(t *testing.T, base string) (body, contentType string) {
 	b, _ := io.ReadAll(resp.Body)
 	return string(b), resp.Header.Get("Content-Type")
 }
+
+func TestMetricsHTTPInFlightBalanced(t *testing.T) {
+	hs, _, _ := testServer(t)
+	// drive several COMPLETED requests; each must inc then dec the gauge
+	for i := 0; i < 3; i++ {
+		must200(t, hs.URL+"/v1/runs")
+	}
+	body, _ := scrapeMetrics(t, hs.URL)
+	// The /metrics scrape itself is in flight while rendering, so the gauge reads
+	// exactly 1 (only the scrape). A leak from the prior 3 requests would show 2+.
+	if !strings.Contains(body, "magister_http_requests_in_flight 1\n") {
+		t.Errorf("want in_flight == 1 (only the scrape), prior requests leaked?\n%s", body)
+	}
+}

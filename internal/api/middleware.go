@@ -141,6 +141,8 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 func metricsMiddleware(m *metrics.Metrics, routes *http.ServeMux) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			m.HTTPStarted()
+			defer m.HTTPFinished()
 			start := time.Now()
 			rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 			next.ServeHTTP(rec, r)

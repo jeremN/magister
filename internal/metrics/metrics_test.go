@@ -20,8 +20,14 @@ func TestNilMetricsIsNoOp(t *testing.T) {
 	m.ObserveStep("failed", time.Second)
 	m.StepRetried()
 	m.GateAwaited()
-	m.AgentTool()
-	m.AddCost(1.5)
+	m.AgentTool("mock")
+	m.AddCost("mock", 1.5)
+	m.RunStarted()
+	m.RunFinished()
+	m.StepStarted()
+	m.StepFinished()
+	m.HTTPStarted()
+	m.HTTPFinished()
 	m.ObserveHTTP("GET", "/x", 200, time.Second)
 	var b strings.Builder
 	m.WriteProm(&b)
@@ -37,9 +43,11 @@ func TestRendersCountersAndHistogram(t *testing.T) {
 	m.ObserveStep("succeeded", 3*time.Second)
 	m.StepRetried()
 	m.GateAwaited()
-	m.AgentTool()
-	m.AgentTool()
-	m.AddCost(0.25)
+	m.AgentTool("opus")
+	m.AgentTool("opus")
+	m.AddCost("opus", 0.25)
+	m.RunStarted()
+	m.StepStarted()
 	m.ObserveHTTP("GET", "/v1/runs", 200, 30*time.Millisecond)
 	out := scrape(m)
 
@@ -52,8 +60,13 @@ func TestRendersCountersAndHistogram(t *testing.T) {
 		`magister_steps_total{status="succeeded"} 1`,
 		`magister_steps_total{status="retrying"} 1`,
 		"magister_gates_awaiting_total 1",
-		"magister_agent_tool_calls_total 2",
-		"magister_agent_cost_usd_total 0.25",
+		`magister_agent_tool_calls_total{agent="opus"} 2`,
+		`magister_agent_cost_usd_total{agent="opus"} 0.25`,
+		"# TYPE magister_runs_active gauge",
+		"magister_runs_active 1",
+		"magister_steps_active 1",
+		"# TYPE magister_http_requests_in_flight gauge",
+		"magister_http_requests_in_flight 0",
 		`magister_http_requests_total{method="GET",route="/v1/runs",status="200"} 1`,
 		"# TYPE magister_http_request_duration_seconds histogram",
 		`magister_http_request_duration_seconds_count{method="GET",route="/v1/runs"} 1`,
@@ -134,5 +147,26 @@ func TestHTTPCounterConcurrent(t *testing.T) {
 	wg.Wait()
 	if !strings.Contains(scrape(m), `magister_http_requests_total{method="GET",route="/x",status="200"} 5000`) {
 		t.Errorf("concurrent count wrong\n%s", scrape(m))
+	}
+}
+
+func TestAgentLabelAndGaugeBalance(t *testing.T) {
+	m := New("v")
+	m.AddCost("opus", 0.10)
+	m.AddCost("sonnet", 0.02)
+	m.AgentTool("opus")
+	m.HTTPStarted()
+	m.HTTPStarted()
+	m.HTTPFinished()
+	out := scrape(m)
+	for _, want := range []string{
+		`magister_agent_cost_usd_total{agent="opus"} 0.1`,
+		`magister_agent_cost_usd_total{agent="sonnet"} 0.02`,
+		`magister_agent_tool_calls_total{agent="opus"} 1`,
+		"magister_http_requests_in_flight 1", // 2 started, 1 finished
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("scrape missing %q\n---\n%s", want, out)
+		}
 	}
 }

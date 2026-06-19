@@ -22,8 +22,12 @@ type Metrics struct {
 	stepsTotal    *CounterVec // label: status
 	stepDuration  *Histogram
 	gatesAwaiting Counter
-	agentTools    Counter
-	agentCost     Counter
+	agentTools    *CounterVec // label: agent
+	agentCost     *CounterVec // label: agent
+
+	runsActive   Gauge
+	stepsActive  Gauge
+	httpInFlight Gauge
 
 	httpRequests *CounterVec   // labels: method, route, status
 	httpDuration *HistogramVec // labels: method, route
@@ -44,6 +48,8 @@ func New(version string) *Metrics {
 		runDuration:  newHistogram(runBuckets),
 		stepsTotal:   newCounterVec(),
 		stepDuration: newHistogram(stepBuckets),
+		agentTools:   newCounterVec(),
+		agentCost:    newCounterVec(),
 		httpRequests: newCounterVec(),
 		httpDuration: newHistogramVec(httpBuckets),
 	}
@@ -102,18 +108,63 @@ func (m *Metrics) GateAwaited() {
 	m.gatesAwaiting.Add(1)
 }
 
-func (m *Metrics) AgentTool() {
+func (m *Metrics) AgentTool(agent string) {
 	if m == nil {
 		return
 	}
-	m.agentTools.Add(1)
+	m.agentTools.Add(1, agent)
 }
 
-func (m *Metrics) AddCost(usd float64) {
+func (m *Metrics) AddCost(agent string, usd float64) {
 	if m == nil || usd == 0 {
 		return
 	}
-	m.agentCost.Add(usd)
+	m.agentCost.Add(usd, agent)
+}
+
+// RunStarted/RunFinished bracket a run; the gauge reflects concurrent runs.
+func (m *Metrics) RunStarted() {
+	if m == nil {
+		return
+	}
+	m.runsActive.Inc()
+}
+
+func (m *Metrics) RunFinished() {
+	if m == nil {
+		return
+	}
+	m.runsActive.Dec()
+}
+
+// StepStarted/StepFinished bracket a step execution; the gauge reflects concurrent steps.
+func (m *Metrics) StepStarted() {
+	if m == nil {
+		return
+	}
+	m.stepsActive.Inc()
+}
+
+func (m *Metrics) StepFinished() {
+	if m == nil {
+		return
+	}
+	m.stepsActive.Dec()
+}
+
+// HTTPStarted/HTTPFinished bracket a request; the gauge reflects in-flight requests.
+func (m *Metrics) HTTPStarted() {
+	if m == nil {
+		return
+	}
+	m.httpInFlight.Inc()
+}
+
+func (m *Metrics) HTTPFinished() {
+	if m == nil {
+		return
+	}
+	m.httpInFlight.Dec()
 }
 
 func (m *Metrics) ObserveHTTP(method, route string, status int, d time.Duration) {
@@ -138,8 +189,11 @@ func (m *Metrics) WriteProm(w io.Writer) {
 	writeCounterVec(w, "magister_steps_total", "Total step outcomes by status.", []string{"status"}, m.stepsTotal)
 	writeHistogram(w, "magister_step_duration_seconds", "Step wall-clock duration in seconds.", m.stepDuration)
 	writeCounterRaw(w, "magister_gates_awaiting_total", "Total times a gate began awaiting manual approval.", m.gatesAwaiting.value())
-	writeCounterRaw(w, "magister_agent_tool_calls_total", "Total agent tool-use milestones.", m.agentTools.value())
-	writeCounterRaw(w, "magister_agent_cost_usd_total", "Total agent cost in USD.", m.agentCost.value())
+	writeCounterVec(w, "magister_agent_tool_calls_total", "Total agent tool-use milestones by agent.", []string{"agent"}, m.agentTools)
+	writeCounterVec(w, "magister_agent_cost_usd_total", "Total agent cost in USD by agent.", []string{"agent"}, m.agentCost)
+	writeGauge(w, "magister_runs_active", "Runs currently executing.", m.runsActive.value())
+	writeGauge(w, "magister_steps_active", "Steps currently executing.", m.stepsActive.value())
+	writeGauge(w, "magister_http_requests_in_flight", "HTTP requests currently being served.", m.httpInFlight.value())
 	writeCounterVec(w, "magister_http_requests_total", "Total HTTP requests by method, route, and status.", []string{"method", "route", "status"}, m.httpRequests)
 	writeHistogramVec(w, "magister_http_request_duration_seconds", "HTTP request duration in seconds.", []string{"method", "route"}, m.httpDuration)
 	writeRuntime(w)

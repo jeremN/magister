@@ -24,7 +24,7 @@ func (GeminiSpec) Args(model, prompt string) []string {
 		"-m", model,
 		"-o", "stream-json",
 		"--approval-mode", "yolo", // auto-approve all tools; headless can't prompt
-		"--skip-trust",            // else a workspace-trust prompt hangs the headless run
+		"--skip-trust", // else a workspace-trust prompt hangs the headless run
 	}
 }
 

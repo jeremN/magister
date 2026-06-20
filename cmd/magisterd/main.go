@@ -58,11 +58,29 @@ func agents() map[string]core.Executor {
 	}
 }
 
+// parseLogLevel maps a lowercase level name to a slog.Level. It deliberately
+// rejects uppercase and slog's offset syntax (e.g. "INFO+2") so the surface is
+// tight and predictable; an unknown value fails fast.
+func parseLogLevel(s string) (slog.Level, error) {
+	switch s {
+	case "debug":
+		return slog.LevelDebug, nil
+	case "info":
+		return slog.LevelInfo, nil
+	case "warn":
+		return slog.LevelWarn, nil
+	case "error":
+		return slog.LevelError, nil
+	default:
+		return 0, fmt.Errorf("invalid log-level %q: want debug|info|warn|error", s)
+	}
+}
+
 // newLogHandler builds the root slog handler for the daemon. format is "text"
 // (default, key=value) or "json" (one JSON object per line); any other value is
 // rejected so a typo fails fast instead of silently logging in the wrong format.
-func newLogHandler(format string, w io.Writer) (slog.Handler, error) {
-	opts := &slog.HandlerOptions{Level: slog.LevelInfo}
+func newLogHandler(format string, level slog.Level, w io.Writer) (slog.Handler, error) {
+	opts := &slog.HandlerOptions{Level: level}
 	switch format {
 	case "text":
 		return slog.NewTextHandler(w, opts), nil
@@ -77,7 +95,11 @@ func newLogHandler(format string, w io.Writer) (slog.Handler, error) {
 // onListen (optional) is called with the bound address once serving begins.
 func run(args []string, env func(string) string, stopCh <-chan struct{}, onListen func(addr string)) error {
 	cfg := config.Parse(args, env)
-	h, err := newLogHandler(cfg.LogFormat, os.Stderr)
+	lvl, err := parseLogLevel(cfg.LogLevel)
+	if err != nil {
+		return err
+	}
+	h, err := newLogHandler(cfg.LogFormat, lvl, os.Stderr)
 	if err != nil {
 		return err
 	}

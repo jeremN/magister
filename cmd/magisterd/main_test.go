@@ -105,7 +105,7 @@ func TestAgentsRegistry(t *testing.T) {
 
 func TestNewLogHandlerText(t *testing.T) {
 	var buf bytes.Buffer
-	h, err := newLogHandler("text", &buf)
+	h, err := newLogHandler("text", slog.LevelInfo, &buf)
 	if err != nil {
 		t.Fatalf("newLogHandler(text): %v", err)
 	}
@@ -121,7 +121,7 @@ func TestNewLogHandlerText(t *testing.T) {
 
 func TestNewLogHandlerJSON(t *testing.T) {
 	var buf bytes.Buffer
-	h, err := newLogHandler("json", &buf)
+	h, err := newLogHandler("json", slog.LevelInfo, &buf)
 	if err != nil {
 		t.Fatalf("newLogHandler(json): %v", err)
 	}
@@ -140,7 +140,7 @@ func TestNewLogHandlerJSON(t *testing.T) {
 }
 
 func TestNewLogHandlerInvalid(t *testing.T) {
-	_, err := newLogHandler("xml", io.Discard)
+	_, err := newLogHandler("xml", slog.LevelInfo, io.Discard)
 	if err == nil {
 		t.Fatal("newLogHandler(xml) should return an error")
 	}
@@ -157,5 +157,61 @@ func TestRunRejectsBadLogFormat(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "invalid log-format") {
 		t.Errorf("run error = %q, want invalid log-format", err.Error())
+	}
+}
+
+func TestParseLogLevel(t *testing.T) {
+	valid := map[string]slog.Level{
+		"debug": slog.LevelDebug,
+		"info":  slog.LevelInfo,
+		"warn":  slog.LevelWarn,
+		"error": slog.LevelError,
+	}
+	for s, want := range valid {
+		got, err := parseLogLevel(s)
+		if err != nil {
+			t.Errorf("parseLogLevel(%q) unexpected error: %v", s, err)
+		}
+		if got != want {
+			t.Errorf("parseLogLevel(%q) = %v, want %v", s, got, want)
+		}
+	}
+	for _, bad := range []string{"trace", "INFO", "info+2", ""} {
+		_, err := parseLogLevel(bad)
+		if err == nil {
+			t.Errorf("parseLogLevel(%q) should return an error", bad)
+			continue
+		}
+		if !strings.Contains(err.Error(), "invalid log-level") {
+			t.Errorf("parseLogLevel(%q) error = %q, want it to mention invalid log-level", bad, err.Error())
+		}
+	}
+}
+
+func TestNewLogHandlerAppliesLevel(t *testing.T) {
+	var buf bytes.Buffer
+	h, err := newLogHandler("text", slog.LevelWarn, &buf)
+	if err != nil {
+		t.Fatalf("newLogHandler: %v", err)
+	}
+	log := slog.New(h)
+	log.Info("below-threshold")
+	if buf.Len() != 0 {
+		t.Errorf("Info should be suppressed at Warn level, got: %s", buf.String())
+	}
+	log.Warn("above-threshold")
+	if !strings.Contains(buf.String(), "above-threshold") {
+		t.Errorf("Warn should be emitted at Warn level, got: %s", buf.String())
+	}
+}
+
+func TestRunRejectsBadLogLevel(t *testing.T) {
+	stop := make(chan struct{})
+	err := run([]string{"-log-level", "trace"}, func(string) string { return "" }, stop, nil)
+	if err == nil {
+		t.Fatal("run with -log-level trace should return an error")
+	}
+	if !strings.Contains(err.Error(), "invalid log-level") {
+		t.Errorf("run error = %q, want invalid log-level", err.Error())
 	}
 }

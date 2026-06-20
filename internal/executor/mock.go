@@ -19,14 +19,15 @@ type Mock struct {
 }
 
 func (m Mock) Run(ctx context.Context, t core.Task) (core.Result, error) {
+	if err := ctx.Err(); err != nil {
+		return core.Result{}, err
+	}
 	if m.Delay > 0 {
 		select {
 		case <-time.After(m.Delay):
 		case <-ctx.Done():
 			return core.Result{}, ctx.Err()
 		}
-	} else if err := ctx.Err(); err != nil {
-		return core.Result{}, err
 	}
 
 	body := fmt.Sprintf("# %s\nexecutor: %s\nrole: %s\ninputs: %d\n",

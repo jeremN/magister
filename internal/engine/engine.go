@@ -21,6 +21,7 @@ import (
 	"concentus/internal/flow"
 	"concentus/internal/gate"
 	"concentus/internal/join"
+	"concentus/internal/logctx"
 	"concentus/internal/metrics"
 )
 
@@ -381,8 +382,9 @@ func (e *Engine) runAgent(ctx context.Context, runID core.RunID, stepID, role, a
 		}
 		e.Bus.Publish(ev) // Seq is irrelevant on the bus — sse.go re-reads the store for real seqs
 	}
+	agentCtx := logctx.With(ctx, e.logger().With("run", string(runID), "step", stepID, "agent", agentName))
 	agentStart := e.Clock.Now()
-	res, err := ag.Run(ctx, core.Task{
+	res, err := ag.Run(agentCtx, core.Task{
 		RunID:   runID,
 		StepID:  stepID,
 		Role:    role,

@@ -71,6 +71,8 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	reqID, _ := r.Context().Value(requestIDKey).(string)
+	s.Log.Info("run submitted", "req", reqID, "run", string(id))
 	writeJSON(w, http.StatusCreated, runResponse{ID: id})
 }
 

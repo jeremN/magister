@@ -12,6 +12,7 @@ import (
 
 	"concentus/internal/core"
 	"concentus/internal/event"
+	"concentus/internal/logctx"
 )
 
 // CLISpec adapts one coding-agent CLI's invocation and output schema for CLIAgent.
@@ -25,8 +26,6 @@ type CLISpec interface {
 	Parse(stdout io.Reader, emit func(event.Event)) (summary string, costUSD float64, err error)
 }
 
-var discardLogger = slog.New(slog.NewTextHandler(io.Discard, nil))
-
 // CLIAgent is a core.Executor that runs a coding-agent CLI in the step's WorkDir,
 // passes the prompt, parses cost+summary via Spec, and discovers changed files.
 type CLIAgent struct {
@@ -35,16 +34,16 @@ type CLIAgent struct {
 	Spec     CLISpec                                       // ClaudeSpec{}
 	Env      []string                                      // nil ⇒ os.Environ() (carries ANTHROPIC_API_KEY)
 	Discover func(workDir string) ([]core.Artifact, error) // nil ⇒ discoverGit
-	Log      *slog.Logger                                  // nil ⇒ discard (non-fatal discovery errors)
+	Log      *slog.Logger                                  // nil ⇒ context logger (non-fatal discovery errors)
 }
 
 var _ core.Executor = (*CLIAgent)(nil)
 
-func (a *CLIAgent) logger() *slog.Logger {
+func (a *CLIAgent) logger(ctx context.Context) *slog.Logger {
 	if a.Log != nil {
 		return a.Log
 	}
-	return discardLogger
+	return logctx.From(ctx)
 }
 
 func (a *CLIAgent) Run(ctx context.Context, t core.Task) (core.Result, error) {
@@ -93,7 +92,7 @@ func (a *CLIAgent) Run(ctx context.Context, t core.Task) (core.Result, error) {
 	}
 	arts, derr := discover(t.WorkDir)
 	if derr != nil {
-		a.logger().Warn("artifact discovery failed", "step", t.StepID, "err", derr)
+		a.logger(ctx).Warn("artifact discovery failed", "step", t.StepID, "err", derr)
 		arts = nil
 	}
 	for i := range arts {

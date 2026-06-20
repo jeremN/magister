@@ -1,7 +1,9 @@
 package executor
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +12,7 @@ import (
 
 	"concentus/internal/core"
 	"concentus/internal/event"
+	"concentus/internal/logctx"
 )
 
 func stubPath(t *testing.T, name string) string {
@@ -174,4 +177,28 @@ func TestCLIAgentRunDrainsStdoutOnParseError(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("Run deadlocked — stdout was not drained before Wait")
 	}
+}
+
+func TestCLIAgentLoggerPrefersExplicitLog(t *testing.T) {
+	var buf bytes.Buffer
+	a := &CLIAgent{Log: slog.New(slog.NewTextHandler(&buf, nil))}
+	a.logger(context.Background()).Info("hello")
+	if !strings.Contains(buf.String(), "hello") {
+		t.Fatal("logger should use the explicit Log when set")
+	}
+}
+
+func TestCLIAgentLoggerFallsBackToContext(t *testing.T) {
+	var buf bytes.Buffer
+	ctx := logctx.With(context.Background(), slog.New(slog.NewTextHandler(&buf, nil)))
+	a := &CLIAgent{} // Log nil
+	a.logger(ctx).Info("hello")
+	if !strings.Contains(buf.String(), "hello") {
+		t.Fatal("logger should fall back to the context logger when Log is nil")
+	}
+}
+
+func TestCLIAgentLoggerNeverNil(t *testing.T) {
+	a := &CLIAgent{}
+	a.logger(context.Background()).Info("noop") // discard logger; must not panic
 }

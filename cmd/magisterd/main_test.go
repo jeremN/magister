@@ -1,11 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -97,5 +100,62 @@ func TestAgentsRegistry(t *testing.T) {
 	}
 	if cdx.Bin != "codex" || cdx.Model != "" {
 		t.Errorf("codex agent = {Bin:%q Model:%q}, want codex/\"\"", cdx.Bin, cdx.Model)
+	}
+}
+
+func TestNewLogHandlerText(t *testing.T) {
+	var buf bytes.Buffer
+	h, err := newLogHandler("text", &buf)
+	if err != nil {
+		t.Fatalf("newLogHandler(text): %v", err)
+	}
+	slog.New(h).Info("hi", "k", "v")
+	out := buf.String()
+	if strings.HasPrefix(strings.TrimSpace(out), "{") {
+		t.Errorf("text format should not be JSON: %s", out)
+	}
+	if !strings.Contains(out, "msg=hi") || !strings.Contains(out, "k=v") {
+		t.Errorf("text output missing key=value fields: %s", out)
+	}
+}
+
+func TestNewLogHandlerJSON(t *testing.T) {
+	var buf bytes.Buffer
+	h, err := newLogHandler("json", &buf)
+	if err != nil {
+		t.Fatalf("newLogHandler(json): %v", err)
+	}
+	slog.New(h).Info("hi", "k", "v")
+	line := strings.TrimSpace(buf.String())
+	if !strings.HasPrefix(line, "{") {
+		t.Fatalf("json output should be a JSON object: %s", line)
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(line), &m); err != nil {
+		t.Fatalf("json output not parseable: %v (%s)", err, line)
+	}
+	if m["msg"] != "hi" || m["k"] != "v" {
+		t.Errorf("json fields wrong: %v", m)
+	}
+}
+
+func TestNewLogHandlerInvalid(t *testing.T) {
+	_, err := newLogHandler("xml", io.Discard)
+	if err == nil {
+		t.Fatal("newLogHandler(xml) should return an error")
+	}
+	if !strings.Contains(err.Error(), "invalid log-format") {
+		t.Errorf("error message = %q, want it to mention invalid log-format", err.Error())
+	}
+}
+
+func TestRunRejectsBadLogFormat(t *testing.T) {
+	stop := make(chan struct{})
+	err := run([]string{"-log-format", "xml"}, func(string) string { return "" }, stop, nil)
+	if err == nil {
+		t.Fatal("run with -log-format xml should return an error")
+	}
+	if !strings.Contains(err.Error(), "invalid log-format") {
+		t.Errorf("run error = %q, want invalid log-format", err.Error())
 	}
 }

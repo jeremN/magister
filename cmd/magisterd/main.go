@@ -6,6 +6,8 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -56,11 +58,30 @@ func agents() map[string]core.Executor {
 	}
 }
 
+// newLogHandler builds the root slog handler for the daemon. format is "text"
+// (default, key=value) or "json" (one JSON object per line); any other value is
+// rejected so a typo fails fast instead of silently logging in the wrong format.
+func newLogHandler(format string, w io.Writer) (slog.Handler, error) {
+	opts := &slog.HandlerOptions{Level: slog.LevelInfo}
+	switch format {
+	case "text":
+		return slog.NewTextHandler(w, opts), nil
+	case "json":
+		return slog.NewJSONHandler(w, opts), nil
+	default:
+		return nil, fmt.Errorf("invalid log-format %q: want text|json", format)
+	}
+}
+
 // run is the testable daemon body. It serves until stopCh closes, then drains.
 // onListen (optional) is called with the bound address once serving begins.
 func run(args []string, env func(string) string, stopCh <-chan struct{}, onListen func(addr string)) error {
 	cfg := config.Parse(args, env)
-	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	h, err := newLogHandler(cfg.LogFormat, os.Stderr)
+	if err != nil {
+		return err
+	}
+	log := slog.New(h)
 
 	st, err := store.Open(cfg.DBPath)
 	if err != nil {

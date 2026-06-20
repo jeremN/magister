@@ -17,6 +17,7 @@ type Config struct {
 	ScratchTTL           time.Duration
 	ScratchSweepInterval time.Duration
 	ShutdownDrain        time.Duration
+	LogFormat            string
 }
 
 // Parse builds a Config from args (nil = none) and an env lookup (e.g. os.Getenv).
@@ -31,6 +32,7 @@ func Parse(args []string, env func(string) string) Config {
 	fs.DurationVar(&c.ScratchTTL, "scratch-ttl", 24*time.Hour, "reclaim a terminal run's scratch this long after it finishes (0 disables)")
 	fs.DurationVar(&c.ScratchSweepInterval, "scratch-sweep-interval", time.Hour, "how often the scratch janitor sweeps")
 	fs.DurationVar(&c.ShutdownDrain, "shutdown-drain", 0, "after shutdown begins, keep serving (readyz=503) this long so load balancers drain before accept stops (0 disables)")
+	fs.StringVar(&c.LogFormat, "log-format", "text", "log output format: text or json")
 	_ = fs.Parse(args)
 
 	c.BearerToken = env("MAGISTER_BEARER_TOKEN")
@@ -49,6 +51,9 @@ func Parse(args []string, env func(string) string) Config {
 		if d, err := time.ParseDuration(v); err == nil {
 			c.ShutdownDrain = d
 		}
+	}
+	if v := env("MAGISTER_LOG_FORMAT"); v != "" && !flagSet(fs, "log-format") {
+		c.LogFormat = v
 	}
 	return c
 }

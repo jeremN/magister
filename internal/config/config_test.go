@@ -90,3 +90,43 @@ func TestShutdownDrainDefaultFlagEnv(t *testing.T) {
 		t.Errorf("env ShutdownDrain = %v, want 3s", c.ShutdownDrain)
 	}
 }
+
+func TestLogFormatDefault(t *testing.T) {
+	c := Parse(nil, func(string) string { return "" })
+	if c.LogFormat != "text" {
+		t.Errorf("default LogFormat = %q, want text", c.LogFormat)
+	}
+}
+
+func TestLogFormatFlag(t *testing.T) {
+	c := Parse([]string{"-log-format", "json"}, func(string) string { return "" })
+	if c.LogFormat != "json" {
+		t.Errorf("LogFormat flag = %q, want json", c.LogFormat)
+	}
+}
+
+func TestLogFormatEnv(t *testing.T) {
+	env := func(k string) string {
+		if k == "MAGISTER_LOG_FORMAT" {
+			return "json"
+		}
+		return ""
+	}
+	c := Parse(nil, env)
+	if c.LogFormat != "json" {
+		t.Errorf("LogFormat from env = %q, want json", c.LogFormat)
+	}
+}
+
+func TestLogFormatFlagWinsOverEnv(t *testing.T) {
+	env := func(k string) string {
+		if k == "MAGISTER_LOG_FORMAT" {
+			return "json"
+		}
+		return ""
+	}
+	c := Parse([]string{"-log-format", "text"}, env)
+	if c.LogFormat != "text" {
+		t.Errorf("explicit flag should win over env: got %q, want text", c.LogFormat)
+	}
+}

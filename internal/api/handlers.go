@@ -91,7 +91,11 @@ func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	rs, err := s.Store.GetRun(r.Context(), core.RunID(r.PathValue("id")))
 	if err != nil {
-		writeError(w, http.StatusNotFound, "unknown run")
+		if errors.Is(err, core.ErrRunNotFound) {
+			writeError(w, http.StatusNotFound, "unknown run")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 	scratch := ""

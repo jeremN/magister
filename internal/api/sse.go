@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -23,7 +24,11 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	id := core.RunID(r.PathValue("id"))
 	if _, err := s.Store.GetRun(r.Context(), id); err != nil {
-		writeError(w, http.StatusNotFound, "unknown run")
+		if errors.Is(err, core.ErrRunNotFound) {
+			writeError(w, http.StatusNotFound, "unknown run")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 

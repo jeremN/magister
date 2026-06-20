@@ -2,6 +2,7 @@ package supervisor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -222,10 +223,10 @@ func pushErr(status int, format string, a ...any) *PushError {
 func (s *Supervisor) Push(ctx context.Context, runID core.RunID, opts PushOpts) (PushResult, error) {
 	rs, err := s.store.GetRun(ctx, runID)
 	if err != nil {
-		// TODO: the store has no not-found sentinel, so a genuine storage error is
-		// also reported as 404. For a loopback SQLite daemon this is almost always a
-		// real not-found; revisit if the store grows a typed ErrNotFound.
-		return PushResult{}, pushErr(http.StatusNotFound, "unknown run %q", runID)
+		if errors.Is(err, core.ErrRunNotFound) {
+			return PushResult{}, pushErr(http.StatusNotFound, "unknown run %q", runID)
+		}
+		return PushResult{}, pushErr(http.StatusInternalServerError, "load run %q: %v", runID, err)
 	}
 	if rs.Repo == "" {
 		return PushResult{}, pushErr(http.StatusBadRequest, "run %q is not an external-repo run (no --repo)", runID)

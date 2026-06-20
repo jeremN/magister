@@ -16,6 +16,14 @@ import (
 )
 
 // ghStub returns the absolute path to the shared fake-gh stub in internal/host/testdata.
+func TestPRStorageError500(t *testing.T) {
+	sup := newPRSup(t, getErrStore{store.NewMem()})
+	_, err := sup.PR(context.Background(), "r1", PROpts{})
+	if got := prErrStatus(t, err); got != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500", got)
+	}
+}
+
 func ghStub(t *testing.T) string {
 	t.Helper()
 	abs, err := filepath.Abs(filepath.Join("..", "host", "testdata", "fake-gh"))

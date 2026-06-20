@@ -2,6 +2,7 @@ package supervisor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -45,8 +46,10 @@ func prErr(status int, format string, a ...any) *PRError {
 func (s *Supervisor) prCore(ctx context.Context, runID core.RunID, opts PROpts) (PRResult, bool, error) {
 	rs, err := s.store.GetRun(ctx, runID)
 	if err != nil {
-		// TODO: no store not-found sentinel; a genuine storage error reads as 404 (as in Push).
-		return PRResult{}, false, prErr(http.StatusNotFound, "unknown run %q", runID)
+		if errors.Is(err, core.ErrRunNotFound) {
+			return PRResult{}, false, prErr(http.StatusNotFound, "unknown run %q", runID)
+		}
+		return PRResult{}, false, prErr(http.StatusInternalServerError, "load run %q: %v", runID, err)
 	}
 	if rs.Repo == "" {
 		return PRResult{}, false, prErr(http.StatusBadRequest, "run %q is not an external-repo run (no --repo)", runID)

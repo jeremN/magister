@@ -17,6 +17,24 @@ import (
 	"concentus/internal/workspace"
 )
 
+// getErrStore is a core.Store whose GetRun fails with a non-sentinel (storage)
+// error, to drive the 500 path. Other methods come from the embedded Mem.
+type getErrStore struct{ *store.Mem }
+
+func (getErrStore) GetRun(context.Context, core.RunID) (core.RunState, error) {
+	return core.RunState{}, errors.New("boom")
+}
+
+func TestPushStorageError500(t *testing.T) {
+	st := store.NewMem()
+	reg := NewApprovalRegistry()
+	sup := New(testEngine(t, st, reg, &workspace.Manager{Root: t.TempDir()}), getErrStore{st}, reg)
+	_, err := sup.Push(context.Background(), "r1", PushOpts{})
+	if got := pushErrStatus(t, err); got != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500", got)
+	}
+}
+
 func requireGitS(t *testing.T) {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {

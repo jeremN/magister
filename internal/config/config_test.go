@@ -130,3 +130,43 @@ func TestLogFormatFlagWinsOverEnv(t *testing.T) {
 		t.Errorf("explicit flag should win over env: got %q, want text", c.LogFormat)
 	}
 }
+
+func TestLogLevelDefault(t *testing.T) {
+	c := Parse(nil, func(string) string { return "" })
+	if c.LogLevel != "info" {
+		t.Errorf("default LogLevel = %q, want info", c.LogLevel)
+	}
+}
+
+func TestLogLevelFlag(t *testing.T) {
+	c := Parse([]string{"-log-level", "debug"}, func(string) string { return "" })
+	if c.LogLevel != "debug" {
+		t.Errorf("LogLevel flag = %q, want debug", c.LogLevel)
+	}
+}
+
+func TestLogLevelEnv(t *testing.T) {
+	env := func(k string) string {
+		if k == "MAGISTER_LOG_LEVEL" {
+			return "warn"
+		}
+		return ""
+	}
+	c := Parse(nil, env)
+	if c.LogLevel != "warn" {
+		t.Errorf("LogLevel from env = %q, want warn", c.LogLevel)
+	}
+}
+
+func TestLogLevelFlagWinsOverEnv(t *testing.T) {
+	env := func(k string) string {
+		if k == "MAGISTER_LOG_LEVEL" {
+			return "warn"
+		}
+		return ""
+	}
+	c := Parse([]string{"-log-level", "info"}, env)
+	if c.LogLevel != "info" {
+		t.Errorf("explicit flag should win over env: got %q, want info", c.LogLevel)
+	}
+}

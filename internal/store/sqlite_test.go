@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -323,5 +324,13 @@ func TestSQLitePing(t *testing.T) {
 	s := tempDB(t)
 	if err := s.Ping(context.Background()); err != nil {
 		t.Fatalf("SQLite.Ping = %v, want nil", err)
+	}
+}
+
+func TestSQLiteGetRunUnknownIsSentinel(t *testing.T) {
+	s := tempDB(t)
+	_, err := s.GetRun(context.Background(), "nope")
+	if !errors.Is(err, core.ErrRunNotFound) {
+		t.Fatalf("GetRun unknown: want errors.Is ErrRunNotFound, got %v", err)
 	}
 }

@@ -115,7 +115,7 @@ func (m *Mem) GetRun(_ context.Context, id core.RunID) (core.RunState, error) {
 	defer m.mu.Unlock()
 	r, ok := m.runs[id]
 	if !ok {
-		return core.RunState{}, fmt.Errorf("unknown run %q", id)
+		return core.RunState{}, fmt.Errorf("unknown run %q: %w", id, core.ErrRunNotFound)
 	}
 	return cloneRun(r), nil
 }

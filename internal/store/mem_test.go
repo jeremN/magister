@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -169,5 +170,12 @@ func TestMemLoadIncompleteRuns(t *testing.T) {
 func TestMemPing(t *testing.T) {
 	if err := NewMem().Ping(context.Background()); err != nil {
 		t.Fatalf("Mem.Ping = %v, want nil", err)
+	}
+}
+
+func TestMemGetRunUnknownIsSentinel(t *testing.T) {
+	_, err := NewMem().GetRun(context.Background(), "nope")
+	if !errors.Is(err, core.ErrRunNotFound) {
+		t.Fatalf("GetRun unknown: want errors.Is ErrRunNotFound, got %v", err)
 	}
 }

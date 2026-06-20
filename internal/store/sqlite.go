@@ -122,7 +122,7 @@ func (s *SQLite) GetRun(ctx context.Context, id core.RunID) (core.RunState, erro
 	row, err := s.qr.GetRun(ctx, string(id))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return core.RunState{}, fmt.Errorf("unknown run %q", id)
+			return core.RunState{}, fmt.Errorf("unknown run %q: %w", id, core.ErrRunNotFound)
 		}
 		return core.RunState{}, err
 	}

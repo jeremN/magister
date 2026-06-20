@@ -2,10 +2,16 @@ package core
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"concentus/internal/event"
 )
+
+// ErrRunNotFound is returned (wrapped) by Store.GetRun when no run with the given
+// id exists. Callers use errors.Is to distinguish a missing run (HTTP 404) from a
+// storage failure (HTTP 500).
+var ErrRunNotFound = errors.New("run not found")
 
 // RunState is the persisted state of a run (for queries and, from M2, resume).
 type RunState struct {

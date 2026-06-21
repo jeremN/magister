@@ -305,7 +305,7 @@ func TestBackoffJitterAndCap(t *testing.T) {
 	s := &flow.Step{Retry: &flow.RetryPolicy{Max: 200, Backoff: flow.Duration(time.Second)}}
 
 	for _, attempt := range []int{2, 3, 4, 7, 200} {
-		if !e.backoff(context.Background(), s, attempt) {
+		if !e.backoff(context.Background(), "test-run", s, attempt) {
 			t.Fatalf("backoff(attempt=%d) returned false", attempt)
 		}
 	}

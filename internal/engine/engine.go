@@ -276,7 +276,7 @@ func (e *Engine) runStep(ctx context.Context, runID core.RunID, s *flow.Step, in
 			e.transition(ctx, runID, stepState(runID, s.ID, core.StepRetrying, attempt, workDir, core.Result{}, lastErr),
 				event.Event{StepID: s.ID, Kind: event.StepRetrying, Attempt: attempt})
 			e.Metrics.StepRetried()
-			if !e.backoff(ctx, s, attempt) {
+			if !e.backoff(ctx, runID, s, attempt) {
 				return core.Result{}, ctx.Err()
 			}
 		}
@@ -309,6 +309,7 @@ func (e *Engine) runStep(ctx context.Context, runID core.RunID, s *flow.Step, in
 		if s.Join != nil && s.Join.OnConflict == flow.FailEscalate {
 			return e.escalateJoin(ctx, runID, s, inputs, workDir, lastErr, attempt)
 		}
+		e.logger().Warn("retry budget exhausted", "run", string(runID), "step", s.ID, "attempts", attempt, "last_err", lastErr, "escalating", gateFailed && gateEscalates(s))
 		// A failed auto/conditional gate with on_fail=escalate becomes a human approval.
 		if gateFailed && gateEscalates(s) {
 			return e.escalate(ctx, runID, s, res, workDir, lastErr, attempt)
@@ -449,7 +450,7 @@ func (e *Engine) randFloat() float64 {
 // backoff sleeps before a retry using the injected clock. Returns false if the
 // context was canceled while waiting. Exponential, clamped to maxBackoff, with
 // full jitter (sleep ∈ [0, ceiling)) to spread concurrent retries.
-func (e *Engine) backoff(ctx context.Context, s *flow.Step, attempt int) bool {
+func (e *Engine) backoff(ctx context.Context, runID core.RunID, s *flow.Step, attempt int) bool {
 	if s.Retry == nil || s.Retry.Backoff <= 0 {
 		return true
 	}
@@ -462,6 +463,7 @@ func (e *Engine) backoff(ctx context.Context, s *flow.Step, attempt int) bool {
 		d = maxBackoff
 	}
 	d = time.Duration(e.randFloat() * float64(d)) // full jitter
+	e.logger().Debug("step backoff", "run", string(runID), "step", s.ID, "attempt", attempt, "delay", d, "base", base)
 	select {
 	case <-e.Clock.After(d):
 		return true

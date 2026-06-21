@@ -10,6 +10,7 @@ import (
 
 	"concentus/internal/core"
 	"concentus/internal/event"
+	"concentus/internal/executor"
 	"concentus/internal/flow"
 	"concentus/internal/gate"
 	"concentus/internal/join"
@@ -68,5 +69,32 @@ func TestRetryBackoffAndExhaustionLogs(t *testing.T) {
 	}
 	if !hasLine(out, "level=WARN", "retry budget exhausted", "attempts=2", "escalating=false") {
 		t.Errorf("missing retry-budget-exhausted Warn line:\n%s", out)
+	}
+}
+
+func TestNormalStepLogs(t *testing.T) {
+	var buf bytes.Buffer
+	eng, st, _ := newEngine(t, map[string]core.Executor{"mock": executor.Mock{Name: "mock"}}, nil)
+	eng.Log = debugLogger(&buf)
+	f := &flow.Flow{Name: "one", Steps: []*flow.Step{
+		{ID: "greet", Agent: "mock", Role: "implementer",
+			Gate: flow.Gate{Policy: flow.GateAuto, Verifier: &flow.Verifier{Command: "true"}}},
+	}}
+	mustCreate(t, st, "r1", f)
+	if err := eng.Run(context.Background(), "r1", f); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	out := buf.String()
+	if !hasLine(out, "agent starting", "agent=mock", "role=implementer", "attempt=1") {
+		t.Errorf("missing agent-starting line:\n%s", out)
+	}
+	if !hasLine(out, "agent finished", "agent=mock", "dur=", "cost_usd=") {
+		t.Errorf("missing agent-finished line:\n%s", out)
+	}
+	if !hasLine(out, "step slot acquired", "step=greet", "waited=") {
+		t.Errorf("missing slot-acquired line:\n%s", out)
+	}
+	if !hasLine(out, "gate evaluated", "step=greet", "policy=auto", "pass=true") {
+		t.Errorf("missing gate-evaluated line:\n%s", out)
 	}
 }

@@ -174,6 +174,7 @@ func (e *Engine) runDAG(parent context.Context, runID core.RunID, f *flow.Flow, 
 
 			// 3. acquire concurrency tokens (per-run, then global), held only
 			//    around the work — never while waiting on deps (no hold-and-wait).
+			queueStart := e.Clock.Now()
 			if perRun != nil {
 				select {
 				case perRun <- struct{}{}:
@@ -191,6 +192,7 @@ func (e *Engine) runDAG(parent context.Context, runID core.RunID, f *flow.Flow, 
 			if ctx.Err() != nil {
 				return
 			}
+			e.logger().Debug("step slot acquired", "run", string(runID), "step", s.ID, "waited", e.Clock.Now().Sub(queueStart))
 			e.Metrics.StepStarted()
 			defer e.Metrics.StepFinished()
 
@@ -354,6 +356,11 @@ func (e *Engine) attempt(ctx context.Context, runID core.RunID, s *flow.Step, in
 		e.Metrics.GateAwaited()
 	}
 	ok, gerr := e.Gate.Evaluate(gateCtx, runID, s, res, workDir)
+	gargs := []any{"run", string(runID), "step", s.ID, "attempt", attemptNum, "policy", gatePolicyOf(s), "pass", ok}
+	if gerr != nil {
+		gargs = append(gargs, "err", gerr)
+	}
+	e.logger().Debug("gate evaluated", gargs...)
 	switch {
 	case gerr != nil:
 		return res, false, gerr
@@ -384,6 +391,7 @@ func (e *Engine) runAgent(ctx context.Context, runID core.RunID, stepID, role, a
 		e.Bus.Publish(ev) // Seq is irrelevant on the bus — sse.go re-reads the store for real seqs
 	}
 	agentCtx := logctx.With(ctx, e.logger().With("run", string(runID), "step", stepID, "agent", agentName))
+	e.logger().Debug("agent starting", "run", string(runID), "step", stepID, "agent", agentName, "role", role, "attempt", attemptNum)
 	agentStart := e.Clock.Now()
 	res, err := ag.Run(agentCtx, core.Task{
 		RunID:   runID,
@@ -394,8 +402,14 @@ func (e *Engine) runAgent(ctx context.Context, runID core.RunID, stepID, role, a
 		WorkDir: workDir,
 		Emit:    emit,
 	})
-	e.Metrics.ObserveAgentRun(agentName, e.Clock.Now().Sub(agentStart)) // every invocation, incl. errors
-	e.Metrics.AddCost(agentName, res.CostUSD)                           // per-invocation; no-op on 0 cost
+	dur := e.Clock.Now().Sub(agentStart)
+	e.Metrics.ObserveAgentRun(agentName, dur) // every invocation, incl. errors
+	e.Metrics.AddCost(agentName, res.CostUSD) // per-invocation; no-op on 0 cost
+	args := []any{"run", string(runID), "step", stepID, "agent", agentName, "attempt", attemptNum, "dur", dur, "cost_usd", res.CostUSD}
+	if err != nil {
+		args = append(args, "err", err)
+	}
+	e.logger().Debug("agent finished", args...)
 	return res, err
 }
 

@@ -98,3 +98,30 @@ func TestNormalStepLogs(t *testing.T) {
 		t.Errorf("missing gate-evaluated line:\n%s", out)
 	}
 }
+
+func TestJoinStartFinishLogs(t *testing.T) {
+	var buf bytes.Buffer
+	execs := map[string]core.Executor{
+		"a": fileWriterExec{file: "a.md", body: "A"},
+		"b": fileWriterExec{file: "b.md", body: "B"}, // different files → clean merge, no conflict
+	}
+	eng, st := newGitEngine(t, execs)
+	eng.Log = debugLogger(&buf)
+	f := &flow.Flow{Name: "merge", Steps: []*flow.Step{
+		{ID: "a", Agent: "a", Workspace: flow.WSIsolated, Gate: flow.Gate{Policy: flow.GateAuto, Verifier: &flow.Verifier{Command: "true"}}},
+		{ID: "b", Agent: "b", Workspace: flow.WSIsolated, Gate: flow.Gate{Policy: flow.GateAuto, Verifier: &flow.Verifier{Command: "true"}}},
+		{ID: "integrate", Needs: []string{"a", "b"}, Workspace: flow.WSIsolated,
+			Join: &flow.Join{Strategy: flow.JoinMerge}},
+	}}
+	mustCreate(t, st, "r1", f)
+	if err := eng.Run(context.Background(), "r1", f); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	out := buf.String()
+	if !hasLine(out, "join starting", "step=integrate", "strategy=merge", "inputs=") {
+		t.Errorf("missing join-starting line:\n%s", out)
+	}
+	if !hasLine(out, "join finished", "step=integrate", "strategy=merge") {
+		t.Errorf("missing join-finished line:\n%s", out)
+	}
+}

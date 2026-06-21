@@ -426,7 +426,18 @@ func (e *Engine) execute(ctx context.Context, runID core.RunID, s *flow.Step, in
 		run := func(ctx context.Context, agentName, prompt, wd string, in []core.Artifact) (core.Result, error) {
 			return e.runAgent(ctx, runID, s.ID, "arbiter", agentName, prompt, wd, attemptNum, in)
 		}
-		return strat.Join(ctx, s, inputs, workDir, run)
+		e.logger().Debug("join starting", "run", string(runID), "step", s.ID, "strategy", s.Join.Strategy, "inputs", len(inputs), "attempt", attemptNum)
+		res, err := strat.Join(ctx, s, inputs, workDir, run)
+		jargs := []any{"run", string(runID), "step", s.ID, "strategy", s.Join.Strategy, "attempt", attemptNum}
+		if err != nil {
+			jargs = append(jargs, "err", err)
+		}
+		e.logger().Debug("join finished", jargs...)
+		var conflict *join.ConflictError
+		if errors.As(err, &conflict) {
+			e.logger().Warn("merge conflict detected", "run", string(runID), "step", s.ID, "branch", conflict.Branch, "paths", conflict.Paths, "attempt", attemptNum)
+		}
+		return res, err
 	}
 	return e.runAgent(ctx, runID, s.ID, s.Role, s.Agent, promptFor(s, inputs), workDir, attemptNum, inputs)
 }

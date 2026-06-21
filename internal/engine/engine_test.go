@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -1164,11 +1165,16 @@ func TestMergeConflictEscalateApproveCommits(t *testing.T) {
 		"arbiter": fileWriterExec{file: "shared.md", body: "RESOLVED"},
 	}
 	eng, st := newGitEngine(t, execs)
+	var logBuf bytes.Buffer
+	eng.Log = debugLogger(&logBuf)
 	if err := st.CreateRun(context.Background(), core.RunState{ID: "r1", Name: "f", Status: core.RunPending}); err != nil {
 		t.Fatal(err)
 	}
 	if err := eng.Run(context.Background(), "r1", conflictFlow(flow.FailEscalate)); err != nil {
 		t.Fatalf("run should succeed after approve: %v", err)
+	}
+	if !hasLine(logBuf.String(), "level=WARN", "merge conflict detected", "branch=", "paths=") {
+		t.Errorf("missing merge-conflict-detected Warn line:\n%s", logBuf.String())
 	}
 	got, _ := st.GetRun(context.Background(), "r1")
 	var integrate core.StepState

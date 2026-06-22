@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strings"
 
+	"go.opentelemetry.io/otel/codes"
+
 	"concentus/internal/core"
 	"concentus/internal/flow"
 	"concentus/internal/host"
@@ -45,7 +47,15 @@ func prErr(status int, format string, a ...any) *PRError {
 // already-existing PR it returns (PRResult{URL:…}, true, nil); on a newly created
 // PR (PRResult{URL:…}, false, nil); on failure (PRResult{}, false, *PRError). It is
 // the shared core of PR (strict: existing→409) and Ship (idempotent: existing→ok).
-func (s *Supervisor) prCore(ctx context.Context, runID core.RunID, opts PROpts) (PRResult, bool, error) {
+func (s *Supervisor) prCore(ctx context.Context, runID core.RunID, opts PROpts) (_ PRResult, _ bool, err error) {
+	ctx, span := tracer.Start(ctx, "pr "+string(runID))
+	defer span.End()
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+		}
+	}()
 	rs, err := s.store.GetRun(ctx, runID)
 	if err != nil {
 		if errors.Is(err, core.ErrRunNotFound) {

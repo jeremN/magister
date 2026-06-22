@@ -37,6 +37,7 @@ func (s *Server) Router(token string) http.Handler {
 
 	return chain(mux,
 		requestIDMiddleware,
+		tracingMiddleware(v1),
 		loggingMiddleware(s.Log),
 		metricsMiddleware(s.Metrics, v1),
 		recoverMiddleware(s.Log),

@@ -13,6 +13,9 @@ import (
 	"time"
 
 	"github.com/oklog/ulid/v2"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 
 	"concentus/internal/core"
 	"concentus/internal/engine"
@@ -20,6 +23,8 @@ import (
 	"concentus/internal/host"
 	"concentus/internal/workspace"
 )
+
+var tracer = otel.Tracer("concentus")
 
 // Supervisor owns all active runs: it persists+starts new ones, cancels them,
 // routes gate approvals, resumes incomplete runs on startup, and drains on
@@ -64,15 +69,22 @@ func (s *Supervisor) Submit(ctx context.Context, f *flow.Flow, flowYAML, repo, b
 	if err := s.engine.Provision(id, repo, base); err != nil {
 		return "", fmt.Errorf("provision run: %w", err)
 	}
-	s.start(id, func(runCtx context.Context) error { return s.engine.Run(runCtx, id, f) })
+	s.start(ctx, id, func(runCtx context.Context) error { return s.engine.Run(runCtx, id, f) })
 	return id, nil
 }
 
 // start launches a run goroutine under a cancelable context registered for
-// cancellation and shutdown. The context is derived from context.Background(),
-// not any request context, so a run outlives the HTTP request that submitted it.
-func (s *Supervisor) start(id core.RunID, run func(context.Context) error) {
-	runCtx, cancel := context.WithCancel(context.Background())
+// cancellation and shutdown. The base context is derived from context.Background()
+// so a run outlives the HTTP request that submitted it. When parent carries a valid
+// span, its span context is propagated via trace.ContextWithRemoteSpanContext so the
+// run-root span is a child of the submit span — carrying the trace without the
+// request's cancellation.
+func (s *Supervisor) start(parent context.Context, id core.RunID, run func(context.Context) error) {
+	base := context.Background()
+	if sc := trace.SpanContextFromContext(parent); sc.IsValid() {
+		base = trace.ContextWithRemoteSpanContext(base, sc)
+	}
+	runCtx, cancel := context.WithCancel(base)
 	s.mu.Lock()
 	s.runs[id] = cancel
 	s.mu.Unlock()
@@ -164,7 +176,7 @@ func (s *Supervisor) ResumeAll(ctx context.Context) error {
 			s.logger().Error("resume: provision run", "run", rs.ID, "err", err)
 			continue
 		}
-		s.start(rs.ID, func(runCtx context.Context) error { return s.engine.Resume(runCtx, rs, f) })
+		s.start(context.Background(), rs.ID, func(runCtx context.Context) error { return s.engine.Resume(runCtx, rs, f) })
 	}
 	return nil
 }
@@ -220,7 +232,15 @@ func pushErr(status int, format string, a ...any) *PushError {
 // run, identifies the result step (the unique terminal, or opts.Step), reads that
 // step's persisted branch, resolves the remote, and pushes from the scratch clone.
 // Errors are *PushError with an HTTP status (see the slice-2 spec).
-func (s *Supervisor) Push(ctx context.Context, runID core.RunID, opts PushOpts) (PushResult, error) {
+func (s *Supervisor) Push(ctx context.Context, runID core.RunID, opts PushOpts) (_ PushResult, err error) {
+	ctx, span := tracer.Start(ctx, "push "+string(runID))
+	defer span.End()
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+		}
+	}()
 	rs, err := s.store.GetRun(ctx, runID)
 	if err != nil {
 		if errors.Is(err, core.ErrRunNotFound) {

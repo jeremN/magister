@@ -10,6 +10,11 @@ import (
 	"time"
 
 	"github.com/oklog/ulid/v2"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
 
 	"concentus/internal/metrics"
 )
@@ -47,6 +52,32 @@ func (s *statusRecorder) Flush() {
 	}
 }
 
+// tracingMiddleware starts a server span per request named by the bounded route
+// template, extracting an inbound W3C traceparent so a client's trace connects. A
+// no-op until the daemon installs an SDK provider.
+func tracingMiddleware(routes *http.ServeMux) func(http.Handler) http.Handler {
+	tracer := otel.Tracer("concentus")
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ctx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
+			route := routeLabel(r, routes)
+			spanName := r.Method + " " + route
+			ctx, span := tracer.Start(ctx, spanName,
+				trace.WithSpanKind(trace.SpanKindServer),
+				trace.WithAttributes(
+					attribute.String("http.request.method", r.Method),
+					attribute.String("http.route", route)))
+			defer span.End()
+			rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+			next.ServeHTTP(rec, r.WithContext(ctx))
+			span.SetAttributes(attribute.Int("http.response.status_code", rec.status))
+			if rec.status >= 500 {
+				span.SetStatus(codes.Error, http.StatusText(rec.status))
+			}
+		})
+	}
+}
+
 func loggingMiddleware(log *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -54,7 +85,7 @@ func loggingMiddleware(log *slog.Logger) func(http.Handler) http.Handler {
 			rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 			next.ServeHTTP(rec, r)
 			id, _ := r.Context().Value(requestIDKey).(string)
-			log.Info("request",
+			log.InfoContext(r.Context(), "request",
 				"id", id, "method", r.Method, "path", r.URL.Path,
 				"status", rec.status, "dur_ms", time.Since(start).Milliseconds())
 		})

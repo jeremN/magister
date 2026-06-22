@@ -3,6 +3,8 @@ package supervisor
 import (
 	"context"
 
+	"go.opentelemetry.io/otel/codes"
+
 	"concentus/internal/core"
 )
 
@@ -29,7 +31,15 @@ type ShipResult struct {
 // (PRExisted=true), so ship is safe to re-run and converges. On failure it returns the
 // underlying *PushError (push half) or *PRError (pr half), which the API maps via
 // errors.As. Post-run and store-driven; the engine is untouched.
-func (s *Supervisor) Ship(ctx context.Context, runID core.RunID, opts ShipOpts) (ShipResult, error) {
+func (s *Supervisor) Ship(ctx context.Context, runID core.RunID, opts ShipOpts) (_ ShipResult, err error) {
+	ctx, span := tracer.Start(ctx, "ship "+string(runID))
+	defer span.End()
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+		}
+	}()
 	pushRemote := opts.Remote
 	if opts.HeadRepo != "" {
 		pushRemote = opts.HeadRepo // fork ship: the branch must land on the fork

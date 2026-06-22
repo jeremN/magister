@@ -35,6 +35,10 @@ type Server struct {
 	// Metrics records HTTP + (via the engine) domain metrics; nil = no-op. Served at
 	// GET /metrics (auth-exempt).
 	Metrics *metrics.Metrics
+	// LogLevel is the live log threshold; POST /v1/loglevel mutates it and every
+	// logger built on the shared handler re-thresholds at once. nil = the endpoint
+	// returns 503 (the daemon always wires it).
+	LogLevel *slog.LevelVar
 	// draining is set true at shutdown so /readyz returns 503 while liveness
 	// (/healthz) stays 200. Zero value = not draining.
 	draining atomic.Bool

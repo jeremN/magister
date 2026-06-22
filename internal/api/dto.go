@@ -98,6 +98,16 @@ type errorResponse struct {
 	Error string `json:"error"`
 }
 
+// logLevelRequest is the JSON body of POST /v1/loglevel.
+type logLevelRequest struct {
+	Level string `json:"level"`
+}
+
+// logLevelResponse is returned from GET and POST /v1/loglevel.
+type logLevelResponse struct {
+	Level string `json:"level"`
+}
+
 func snapshotFromState(rs core.RunState, scratch string) runSnapshot {
 	out := runSnapshot{
 		ID: rs.ID, Name: rs.Name, Status: string(rs.Status),

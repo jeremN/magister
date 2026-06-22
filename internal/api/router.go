@@ -26,6 +26,8 @@ func (s *Server) Router(token string) http.Handler {
 	v1.HandleFunc("POST /v1/runs/{id}/push", s.handlePush)
 	v1.HandleFunc("POST /v1/runs/{id}/pr", s.handlePR)
 	v1.HandleFunc("POST /v1/runs/{id}/ship", s.handleShip)
+	v1.HandleFunc("GET /v1/loglevel", s.handleGetLogLevel)
+	v1.HandleFunc("POST /v1/loglevel", s.handleSetLogLevel)
 
 	authed := chain(v1,
 		authMiddleware(token),

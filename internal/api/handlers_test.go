@@ -663,3 +663,41 @@ func TestPREndpointOpensCrossForkPR(t *testing.T) {
 		t.Errorf("response = %+v, want Repo=o/r Head=fork:magister/r1", pr)
 	}
 }
+
+// TestShipEndpointRoutesPushToHeadRepo: a /ship body with head_repo routes the push to
+// the fork, proving the handler threads head_repo into ShipOpts.HeadRepo. origin is a
+// local bare (the upstream), the fork is a second local bare; magister/<run> must land
+// on the fork. (The PR half then 400s on the non-github origin base — ignored here.)
+func TestShipEndpointRoutesPushToHeadRepo(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	src, _ := setupAPISourceRepo(t)
+	origin := t.TempDir()
+	runGit(t, origin, "init", "--bare")
+	runGit(t, src, "remote", "add", "origin", origin)
+	fork := t.TempDir()
+	runGit(t, fork, "init", "--bare")
+
+	hs, st := newGitServer(t)
+	resp, err := http.Post(hs.URL+"/v1/runs?repo="+url.QueryEscape(src)+"&base=HEAD",
+		"application/x-yaml", bytes.NewBufferString(extRepoFlowAPI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rr runResponse
+	json.NewDecoder(resp.Body).Decode(&rr)
+	resp.Body.Close()
+	waitForStatus(t, st, rr.ID, core.RunSucceeded)
+
+	payload, _ := json.Marshal(map[string]string{"head_repo": "file://" + fork})
+	sresp, err := http.Post(hs.URL+"/v1/runs/"+string(rr.ID)+"/ship", "application/json", bytes.NewReader(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sresp.Body.Close()
+
+	// runGit fatals if the ref is absent, so this rev-parse IS the assertion: the push
+	// landed on the fork (not origin), which only happens if head_repo threaded through.
+	runGit(t, fork, "rev-parse", "--verify", "magister/"+string(rr.ID))
+}

@@ -195,7 +195,7 @@ func (s *Server) handleShip(w http.ResponseWriter, r *http.Request) {
 	}
 	res, err := s.Sup.Ship(r.Context(), core.RunID(r.PathValue("id")), supervisor.ShipOpts{
 		Remote: req.Remote, As: req.As, Step: req.Step, Base: req.Base,
-		Title: req.Title, Body: req.Body, Draft: req.Draft, Force: req.Force,
+		Title: req.Title, Body: req.Body, HeadRepo: req.HeadRepo, Draft: req.Draft, Force: req.Force,
 	})
 	if err != nil {
 		var pushE *supervisor.PushError

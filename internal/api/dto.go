@@ -77,14 +77,15 @@ type pushResponse struct {
 // shipRequest is the JSON body of POST /v1/runs/{id}/ship: the union of pr's and
 // push's options. All fields optional.
 type shipRequest struct {
-	Remote string `json:"remote,omitempty"`
-	As     string `json:"as,omitempty"`
-	Step   string `json:"step,omitempty"`
-	Base   string `json:"base,omitempty"`
-	Title  string `json:"title,omitempty"`
-	Body   string `json:"body,omitempty"`
-	Draft  bool   `json:"draft,omitempty"`
-	Force  bool   `json:"force,omitempty"`
+	Remote   string `json:"remote,omitempty"`
+	As       string `json:"as,omitempty"`
+	Step     string `json:"step,omitempty"`
+	Base     string `json:"base,omitempty"`
+	Title    string `json:"title,omitempty"`
+	Body     string `json:"body,omitempty"`
+	HeadRepo string `json:"head_repo,omitempty"`
+	Draft    bool   `json:"draft,omitempty"`
+	Force    bool   `json:"force,omitempty"`
 }
 
 // shipResponse is returned from POST /v1/runs/{id}/ship.

@@ -106,11 +106,28 @@ The daemon pushes the run's **result branch** (the terminal step's `step/<id>`, 
 
 After pushing with `cm push`, open a GitHub Pull Request from the `magister/<run>` branch:
 
-- `cm pr <run> [--remote <url-or-name>] [--as <branch>] [--step <id>] [--base <branch>] [--title <t>] [--body <b>] [--draft]`
+- `cm pr <run> [--remote <url-or-name>] [--as <branch>] [--step <id>] [--base <branch>] [--title <t>] [--body <b>] [--draft] [--head-repo <url-or-name>]`
   opens a GitHub Pull Request on the pushed `magister/<runID>` branch of a succeeded
   external-repo run (run `cm push <run>` first). Uses the `gh` CLI with ambient auth
   (no token handling); `owner/repo` is parsed from the source's origin remote. A PR
-  that already exists is reported as a 409 with its URL.
+  that already exists is reported as a 409 with its URL. **Cross-fork (contribute to a
+  repo you can't write to):** push the branch to your fork (`cm push <run> --remote
+  <fork>`), then `cm pr <run> --head-repo <fork>` opens the PR into upstream with a
+  `forkowner:branch` head (the base stays upstream/origin; `--head-repo` is resolved
+  like `--remote`).
+
+### Deliver in one command (`cm ship`)
+
+`cm ship <run>` = `cm push` then `cm pr` in one idempotent step (an already-open PR is
+reported as `exists`, not an error):
+
+- `cm ship <run> [--remote <url-or-name>] [--head-repo <url-or-name>] [--as <branch>] [--step <id>] [--base <branch>] [--title <t>] [--body <b>] [--draft] [--force]`
+  pushes the result branch then opens (or finds) its PR. **Same-repo:** `--remote` feeds
+  both the push destination and the PR base. **Fork ship (`--head-repo <fork>`):** the
+  push goes to the fork and the PR opens into upstream with a cross-fork head — i.e.
+  `cm ship <run> --head-repo <fork>` is the one-command form of `cm push --remote <fork>`
+  + `cm pr --head-repo <fork>` (in fork mode `--remote` overrides only the PR base,
+  which defaults to the source origin/upstream). `POST /v1/runs/{id}/ship`.
 
 ## Gotchas (each cost real time to learn)
 
@@ -122,4 +139,4 @@ After pushing with `cm push`, open a GitHub Pull Request from the `magister/<run
 
 ## cm command surface
 
-`cm run <flow.yaml> [--repo <abs-path>] [--base <ref>] [--watch]` · `cm ls` · `cm get <run>` · `cm watch <run>` · `cm approve|reject <run> <step> [reason]` · `cm cancel <run>` · `cm push <run> [--remote <url-or-name>] [--as <branch>] [--step <id>] [--force]` · `cm pr <run> [--remote <url-or-name>] [--as <branch>] [--step <id>] [--base <branch>] [--title <t>] [--body <b>] [--draft]`. All target `$MAGISTER_ADDR`. `--repo`/`--base` run the flow against a real git repo; `cm push` delivers its result branch to a remote; `cm pr` opens a GitHub PR on that branch (see *External repo* above).
+`cm run <flow.yaml> [--repo <abs-path>] [--base <ref>] [--watch]` · `cm ls` · `cm get <run>` · `cm watch <run>` · `cm approve|reject <run> <step> [reason]` · `cm cancel <run>` · `cm push <run> [--remote <url-or-name>] [--as <branch>] [--step <id>] [--force]` · `cm pr <run> [--remote <url-or-name>] [--head-repo <url-or-name>] [--as <branch>] [--step <id>] [--base <branch>] [--title <t>] [--body <b>] [--draft]` · `cm ship <run> [--remote <url-or-name>] [--head-repo <url-or-name>] [--as <branch>] [--step <id>] [--base <branch>] [--title <t>] [--body <b>] [--draft] [--force]`. All target `$MAGISTER_ADDR`. `--repo`/`--base` run the flow against a real git repo; `cm push` delivers its result branch to a remote; `cm pr` opens a GitHub PR on that branch; `cm ship` does both in one idempotent step; `--head-repo <fork>` on `cm pr`/`cm ship` opens a cross-fork PR from your fork into upstream (see *External repo* above).

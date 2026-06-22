@@ -371,3 +371,33 @@ func TestLogLevelNon200PrintsError(t *testing.T) {
 		t.Errorf("output missing server error: %q", out.String())
 	}
 }
+
+// TestShipHeadRepoSendsHeadRepoJSONField: `cm ship --head-repo <url>` marshals the value
+// as the underscore JSON field head_repo (NOT the hyphenated head-repo the generic flag
+// path would produce).
+func TestShipHeadRepoSendsHeadRepoJSONField(t *testing.T) {
+	var body []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		writeBody(w, `{"pushed":{"remote":"r","branch":"magister/r1","source_branch":"step/integrate","commit":"abc"},"pr":{"url":"https://github.com/o/r/pull/4"},"pr_existed":false}`)
+	}))
+	defer srv.Close()
+
+	var out bytes.Buffer
+	code := dispatch([]string{"ship", "r1", "--head-repo", "https://github.com/me/fork.git"}, srv.URL, &out)
+	if code != 0 {
+		t.Fatalf("exit = %d, out=%s", code, out.String())
+	}
+	var sent map[string]any
+	if err := json.Unmarshal(body, &sent); err != nil {
+		t.Fatalf("body not json: %v", err)
+	}
+	if sent["head_repo"] != "https://github.com/me/fork.git" {
+		t.Errorf("head_repo = %v, want the fork url", sent["head_repo"])
+	}
+	if _, hyphen := sent["head-repo"]; hyphen {
+		t.Error("must send head_repo (underscore), not head-repo")
+	}
+}

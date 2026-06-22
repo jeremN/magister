@@ -282,3 +282,65 @@ func TestShipRequiresRun(t *testing.T) {
 		t.Errorf("exit = %d, want 2 (usage)", code)
 	}
 }
+
+func TestLogLevelGetPrintsCurrent(t *testing.T) {
+	var rec http.Request
+	srv := fakeAPI(t, http.StatusOK, `{"level":"warn"}`, &rec)
+	defer srv.Close()
+
+	var out bytes.Buffer
+	if code := dispatch([]string{"loglevel"}, srv.URL, &out); code != 0 {
+		t.Fatalf("exit = %d, out=%s", code, out.String())
+	}
+	if rec.Method != http.MethodGet || rec.URL.Path != "/v1/loglevel" {
+		t.Errorf("request = %s %s, want GET /v1/loglevel", rec.Method, rec.URL.Path)
+	}
+	if !strings.Contains(out.String(), "warn") {
+		t.Errorf("output missing level: %q", out.String())
+	}
+}
+
+func TestLogLevelSetSendsJSONBody(t *testing.T) {
+	var got http.Request
+	var body []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = *r
+		body, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		writeBody(w, `{"level":"debug"}`)
+	}))
+	defer srv.Close()
+
+	var out bytes.Buffer
+	if code := dispatch([]string{"loglevel", "debug"}, srv.URL, &out); code != 0 {
+		t.Fatalf("exit = %d, out=%s", code, out.String())
+	}
+	if got.Method != http.MethodPost || got.URL.Path != "/v1/loglevel" {
+		t.Errorf("request = %s %s, want POST /v1/loglevel", got.Method, got.URL.Path)
+	}
+	var sent map[string]any
+	if err := json.Unmarshal(body, &sent); err != nil {
+		t.Fatalf("body not json: %v", err)
+	}
+	if sent["level"] != "debug" {
+		t.Errorf("body = %v, want level=debug", sent)
+	}
+	if !strings.Contains(out.String(), "debug") {
+		t.Errorf("output missing echoed level: %q", out.String())
+	}
+}
+
+func TestLogLevelNon200PrintsError(t *testing.T) {
+	var rec http.Request
+	srv := fakeAPI(t, http.StatusBadRequest, `{"error":"invalid log-level \"bogus\": want debug|info|warn|error"}`, &rec)
+	defer srv.Close()
+
+	var out bytes.Buffer
+	if code := dispatch([]string{"loglevel", "bogus"}, srv.URL, &out); code == 0 {
+		t.Fatalf("exit = 0, want non-zero; out=%s", out.String())
+	}
+	if !strings.Contains(out.String(), "invalid log-level") {
+		t.Errorf("output missing server error: %q", out.String())
+	}
+}

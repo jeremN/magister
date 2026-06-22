@@ -30,7 +30,7 @@ func main() {
 
 func dispatch(args []string, base string, out io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(out, "usage: cm <run|ls|get|watch|approve|reject|cancel|push|pr|ship> ...")
+		fmt.Fprintln(out, "usage: cm <run|ls|get|watch|approve|reject|cancel|push|pr|ship|loglevel> ...")
 		return 2
 	}
 	c := &client{base: base, http: &http.Client{Timeout: 0}}
@@ -67,6 +67,8 @@ func dispatch(args []string, base string, out io.Writer) int {
 		return c.pr(args[1:], out)
 	case "ship":
 		return c.ship(args[1:], out)
+	case "loglevel":
+		return c.loglevel(args[1:], out)
 	default:
 		fmt.Fprintf(out, "unknown command %q\n", args[0])
 		return 2
@@ -404,6 +406,34 @@ func (c *client) ship(args []string, out io.Writer) int {
 	return 0
 }
 
+// logLevelBody is the JSON body cm sends to POST /v1/loglevel.
+type logLevelBody struct {
+	Level string `json:"level"`
+}
+
+// loglevel reports (no arg) or sets (one arg) the daemon's live log threshold.
+func (c *client) loglevel(args []string, out io.Writer) int {
+	if len(args) == 0 {
+		return c.get("/v1/loglevel", out)
+	}
+	body, err := json.Marshal(logLevelBody{Level: args[0]})
+	if err != nil {
+		fmt.Fprintln(out, "loglevel:", err)
+		return 1
+	}
+	resp, err := c.http.Post(c.base+"/v1/loglevel", "application/json", bytes.NewReader(body))
+	if err != nil {
+		fmt.Fprintln(out, "loglevel:", err)
+		return 1
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return printErr(resp, out)
+	}
+	_, _ = io.Copy(out, resp.Body)
+	fmt.Fprintln(out)
+	return 0
+}
 func printErr(resp *http.Response, out io.Writer) int {
 	b, _ := io.ReadAll(resp.Body)
 	fmt.Fprintf(out, "error (%d): %s\n", resp.StatusCode, bytes.TrimSpace(b))

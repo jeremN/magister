@@ -171,7 +171,7 @@ func (s *Server) handlePR(w http.ResponseWriter, r *http.Request) {
 	}
 	res, err := s.Sup.PR(r.Context(), core.RunID(r.PathValue("id")), supervisor.PROpts{
 		Remote: req.Remote, As: req.As, Step: req.Step, Base: req.Base,
-		Title: req.Title, Body: req.Body, Draft: req.Draft,
+		Title: req.Title, Body: req.Body, Draft: req.Draft, HeadRepo: req.HeadRepo,
 	})
 	if err != nil {
 		var pe *supervisor.PRError

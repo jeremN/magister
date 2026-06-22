@@ -610,3 +610,56 @@ func TestShipEndpointPropagatesPRErrorAfterPush(t *testing.T) {
 		t.Error("push should have delivered magister/<run> before the pr step failed")
 	}
 }
+
+func TestPREndpointOpensCrossForkPR(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	src := t.TempDir()
+	runGit(t, src, "init")
+	runGit(t, src, "remote", "add", "origin", "https://github.com/o/r.git")
+
+	st := store.NewMem()
+	reg := supervisor.NewApprovalRegistry()
+	bus := event.NewBus()
+	eng := &engine.Engine{
+		Execs: map[string]core.Executor{"mock": executor.Mock{Name: "mock"}},
+		WS:    &workspace.Manager{Root: t.TempDir()},
+		Gate:  &gate.Evaluator{Approver: &supervisor.RegistryApprover{Reg: reg}, Verifier: gate.CommandVerifier{}},
+		Joins: join.Default(),
+		Store: st, Bus: bus, Clock: core.SystemClock{},
+	}
+	sup := supervisor.New(eng, st, reg)
+	sup.Host = &host.Runner{Bin: ghAPIStub(t)}
+	t.Cleanup(func() { sup.Shutdown(time.Second) })
+	t.Setenv("FAKE_GH_PR_URL", "https://github.com/o/r/pull/9")
+	st.CreateRun(context.Background(), core.RunState{
+		ID: "r1", Name: "demo", Repo: src, Status: core.RunSucceeded,
+		FlowYAML: "name: demo\nsteps:\n  - id: integrate\n    agent: mock\n",
+		Steps: []core.StepState{{
+			RunID: "r1", StepID: "integrate", Status: core.StepSucceeded,
+			Artifacts: []core.Artifact{{StepID: "integrate", Branch: "step/integrate", Commit: "abc"}},
+		}},
+	})
+	srv := &Server{Sup: sup, Store: st, Bus: bus, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	hs := httptest.NewServer(srv.Router(""))
+	t.Cleanup(hs.Close)
+
+	resp, err := http.Post(hs.URL+"/v1/runs/r1/pr", "application/json", strings.NewReader(`{"head_repo":"https://github.com/fork/r.git"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("pr = %d, want 200: %s", resp.StatusCode, b)
+	}
+	var pr prResponse
+	if err := json.NewDecoder(resp.Body).Decode(&pr); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	// head_repo threads through to a cross-fork head; base repo stays upstream.
+	if pr.Repo != "o/r" || pr.Head != "fork:magister/r1" {
+		t.Errorf("response = %+v, want Repo=o/r Head=fork:magister/r1", pr)
+	}
+}

@@ -47,13 +47,14 @@ type approveRequest struct {
 
 // prRequest is the JSON body of POST /v1/runs/{id}/pr. All fields optional.
 type prRequest struct {
-	Remote string `json:"remote,omitempty"`
-	As     string `json:"as,omitempty"`
-	Step   string `json:"step,omitempty"`
-	Base   string `json:"base,omitempty"`
-	Title  string `json:"title,omitempty"`
-	Body   string `json:"body,omitempty"`
-	Draft  bool   `json:"draft,omitempty"`
+	Remote   string `json:"remote,omitempty"`
+	As       string `json:"as,omitempty"`
+	Step     string `json:"step,omitempty"`
+	Base     string `json:"base,omitempty"`
+	Title    string `json:"title,omitempty"`
+	Body     string `json:"body,omitempty"`
+	HeadRepo string `json:"head_repo,omitempty"`
+	Draft    bool   `json:"draft,omitempty"`
 }
 
 // prResponse is returned from POST /v1/runs/{id}/pr.

@@ -15,10 +15,12 @@ import (
 
 // PROpts configures PR. Zero values mean: origin remote, magister/<runID> head, the
 // unique terminal step (for the body summary), the repo's default base branch,
-// generated title/body, not a draft.
+// generated title/body, not a draft. HeadRepo empty means a same-repo PR (head is a
+// bare branch); set to a fork URL-or-remote-name it makes a cross-fork PR whose head
+// is forkowner:branch (the PR still opens on the base repo / origin / --remote).
 type PROpts struct {
-	Remote, As, Step, Base, Title, Body string
-	Draft                               bool
+	Remote, As, Step, Base, Title, Body, HeadRepo string
+	Draft                                         bool
 }
 
 // PRResult is returned by PR on success.
@@ -57,12 +59,12 @@ func (s *Supervisor) prCore(ctx context.Context, runID core.RunID, opts PROpts) 
 	if rs.Status != core.RunSucceeded {
 		return PRResult{}, false, prErr(http.StatusConflict, "run %q is %s, not succeeded", runID, rs.Status)
 	}
-	head := opts.As
-	if head == "" {
-		head = "magister/" + string(runID)
+	branch := opts.As
+	if branch == "" {
+		branch = "magister/" + string(runID)
 	}
-	if !safePRRef(head) {
-		return PRResult{}, false, prErr(http.StatusBadRequest, "invalid head branch %q", head)
+	if !safePRRef(branch) {
+		return PRResult{}, false, prErr(http.StatusBadRequest, "invalid head branch %q", branch)
 	}
 	if opts.Base != "" && !safePRRef(opts.Base) {
 		return PRResult{}, false, prErr(http.StatusBadRequest, "invalid base branch %q", opts.Base)
@@ -74,6 +76,23 @@ func (s *Supervisor) prCore(ctx context.Context, runID core.RunID, opts PROpts) 
 	_, owner, repo, err := host.ParseRemote(remoteURL)
 	if err != nil {
 		return PRResult{}, false, prErr(http.StatusBadRequest, "%v", err)
+	}
+	// head defaults to the bare branch (same-repo PR). With --head-repo the branch
+	// lives on a fork: resolve the fork owner and form the cross-fork head owner:branch.
+	// headOwner is where the head branch actually lives (base owner unless --head-repo).
+	head := branch
+	headOwner := owner
+	if opts.HeadRepo != "" {
+		forkURL, ferr := workspace.ResolveRemote(rs.Repo, opts.HeadRepo)
+		if ferr != nil {
+			return PRResult{}, false, prErr(http.StatusBadRequest, "head-repo: %v", ferr)
+		}
+		_, forkOwner, _, ferr := host.ParseRemote(forkURL)
+		if ferr != nil {
+			return PRResult{}, false, prErr(http.StatusBadRequest, "head-repo: %v", ferr)
+		}
+		headOwner = forkOwner
+		head = forkOwner + ":" + branch
 	}
 	f, err := flow.ParseBytes([]byte(rs.FlowYAML))
 	if err != nil {
@@ -104,8 +123,11 @@ func (s *Supervisor) prCore(ctx context.Context, runID core.RunID, opts PROpts) 
 		Title: title, Body: body, Draft: opts.Draft,
 	})
 	if err != nil {
-		if !runner.BranchExists(ctx, owner, repo, head) {
-			return PRResult{}, false, prErr(http.StatusConflict, "branch %q not on remote; run `cm push %s` first", head, runID)
+		if !runner.BranchExists(ctx, headOwner, repo, branch) {
+			if opts.HeadRepo != "" {
+				return PRResult{}, false, prErr(http.StatusConflict, "branch %q not on fork %s/%s; run `cm push %s --remote <fork>` first", branch, headOwner, repo, runID)
+			}
+			return PRResult{}, false, prErr(http.StatusConflict, "branch %q not on remote; run `cm push %s` first", branch, runID)
 		}
 		return PRResult{}, false, prErr(http.StatusBadGateway, "%v", err)
 	}

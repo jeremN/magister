@@ -235,3 +235,70 @@ func TestPRCoreReportsExistingPR(t *testing.T) {
 		t.Errorf("url = %q, want the existing PR url", res.URL)
 	}
 }
+
+func TestPRFromForkComposesCrossForkHead(t *testing.T) {
+	requireGitS(t)
+	st := store.NewMem()
+	sup := newPRSup(t, st)
+	argv := filepath.Join(t.TempDir(), "argv")
+	t.Setenv("FAKE_GH_ARGV_FILE", argv)
+	t.Setenv("FAKE_GH_PR_URL", "https://github.com/test-owner/test-repo/pull/9")
+	seedExtRun(t, st, "r1", srcWithGHOrigin(t, "https://github.com/test-owner/test-repo.git"))
+
+	res, err := sup.PR(context.Background(), "r1", PROpts{HeadRepo: "https://github.com/fork-owner/test-repo.git"})
+	if err != nil {
+		t.Fatalf("pr: %v", err)
+	}
+	// Base repo stays the upstream; head is the cross-fork owner:branch form.
+	if res.Repo != "test-owner/test-repo" {
+		t.Errorf("repo = %q, want upstream test-owner/test-repo", res.Repo)
+	}
+	if res.Head != "fork-owner:magister/r1" {
+		t.Errorf("head = %q, want fork-owner:magister/r1", res.Head)
+	}
+	got, _ := os.ReadFile(argv)
+	for _, want := range []string{"create", "--repo=test-owner/test-repo", "--head=fork-owner:magister/r1"} {
+		if !strings.Contains(string(got), want+"\n") {
+			t.Errorf("argv missing %q; got:\n%s", want, got)
+		}
+	}
+}
+
+func TestPRFromForkChecksBranchOnFork(t *testing.T) {
+	requireGitS(t)
+	st := store.NewMem()
+	sup := newPRSup(t, st)
+	argv := filepath.Join(t.TempDir(), "argv")
+	t.Setenv("FAKE_GH_ARGV_FILE", argv)
+	t.Setenv("FAKE_GH_CREATE_FAIL", "GraphQL: Head sha can't be blank")
+	t.Setenv("FAKE_GH_BRANCH_MISSING", "1")
+	seedExtRun(t, st, "r1", srcWithGHOrigin(t, "https://github.com/test-owner/test-repo.git"))
+
+	_, err := sup.PR(context.Background(), "r1", PROpts{HeadRepo: "https://github.com/fork-owner/test-repo.git"})
+	if got := prErrStatus(t, err); got != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", got)
+	}
+	var pe *PRError
+	if !errors.As(err, &pe) {
+		t.Fatalf("expected *PRError, got %T", err)
+	}
+	if !strings.Contains(pe.Msg, "cm push") {
+		t.Errorf("message should tell the user to push first, got %q", pe.Msg)
+	}
+	// The branch-existence check must target the FORK owner, not the upstream.
+	got, _ := os.ReadFile(argv)
+	if !strings.Contains(string(got), "repos/fork-owner/test-repo/branches/magister/r1\n") {
+		t.Errorf("BranchExists should query the fork; argv:\n%s", got)
+	}
+}
+
+func TestPRFromForkRejectsNonGitHubHeadRepo(t *testing.T) {
+	requireGitS(t)
+	st := store.NewMem()
+	sup := newPRSup(t, st)
+	seedExtRun(t, st, "r1", srcWithGHOrigin(t, "https://github.com/test-owner/test-repo.git"))
+	_, err := sup.PR(context.Background(), "r1", PROpts{HeadRepo: "https://gitlab.com/fork-owner/test-repo.git"})
+	if got := prErrStatus(t, err); got != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 (non-github head-repo)", got)
+	}
+}

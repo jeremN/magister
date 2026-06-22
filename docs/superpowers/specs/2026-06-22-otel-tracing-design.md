@@ -4,7 +4,25 @@
 
 Add distributed tracing to the daemon: a connected trace spanning the incoming HTTP request → the asynchronous run → each step → each agent-CLI subprocess → gate/join → the post-run push/pr/ship delivery, exported via **OTLP over HTTP** to any OpenTelemetry collector (Jaeger, Tempo, Grafana, Honeycomb, …). This is the last gap in the observability arc (metrics + structured logging + health are done). Tracing is **off by default** — disabled, the runtime is byte-for-byte today's: no spans, no exporter, no network, no log change.
 
-This is the **first deliberate relaxation of the project's stdlib-only invariant**: it adds the OpenTelemetry Go API + SDK + the OTLP/HTTP exporter (transitively `google.golang.org/protobuf`; **no grpc**). The heavy dependencies are confined to a new `internal/otelx` package and `cmd/magisterd`; the instrumented packages (`internal/engine`, `internal/api`, `internal/supervisor`) import only the lightweight OTel **API** (`go.opentelemetry.io/otel/trace`). Go 1.22 is **not** bumped — versions are pinned to the latest OTel release that still supports go 1.22.
+This is the **first deliberate relaxation of the project's stdlib-only invariant**: it adds the OpenTelemetry Go API + SDK (transitively `google.golang.org/protobuf` only; **no grpc**). The heavy dependencies are confined to a new `internal/otelx` package and `cmd/magisterd`; the instrumented packages (`internal/engine`, `internal/api`, `internal/supervisor`) import only the lightweight OTel **API** (`go.opentelemetry.io/otel/trace`). Go 1.22 is **not** bumped — versions are pinned to the latest OTel release that still supports go 1.22.
+
+## Revision (2026-06-22): hand-rolled OTLP/HTTP-JSON exporter — supersedes the official-exporter plan
+
+**Finding (during implementation).** The official OTLP/HTTP exporter `go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp` does **not** deliver the "no grpc / minimal footprint / go 1.22" premise this spec was approved on. `go list -deps` shows it compiles **59 `google.golang.org/grpc` packages into the binary** — the HTTP and gRPC OTLP exporters share an `internal/otlpconfig` package that imports grpc, so even the HTTP exporter links grpc (chain: `otelx → otlptracehttp → otlptracehttp/internal/otlpconfig → grpc`). It also drags `grpc-gateway`, `genproto`, and `go.opentelemetry.io/proto/otlp`, and one of those transitively forces the module's `go` directive to **`go 1.22.7`** (a patch bump above bare `go 1.22`). `proto/otlp` requires grpc in its own `go.mod` at every version, so no version pin avoids it. This directly contradicts the project's defining near-zero-dependency invariant (the Prometheus `/metrics` endpoint was hand-rolled for exactly this reason).
+
+**Decision (approved).** Replace the official exporter with a **hand-rolled `sdktrace.SpanExporter`** (`internal/otelx/otlpjson.go`) that serializes spans to **OTLP-JSON** and POSTs them to `{endpoint}/v1/traces` (`Content-Type: application/json`) over `net/http`. The OTel **SDK** module (`otel/sdk`) does not depend on grpc/proto — only the *exporter* modules do — so the dependency set shrinks to exactly three OTel modules, all bare `go 1.22`, **zero grpc, zero protobuf, zero exporter module**:
+
+- `go.opentelemetry.io/otel` (API) · `go.opentelemetry.io/otel/trace` (API) · `go.opentelemetry.io/otel/sdk` (provider + batch processor + resource). Pinned **v1.32.0** (its whole train declares bare `go 1.22`; `proto/otlp`/`auto/sdk` are not pulled without the exporter module). `go.mod`'s `go 1.22` line is unchanged. (`go.opentelemetry.io/otel/metric` comes in as a pure indirect of the SDK — no grpc.)
+
+This keeps real network export to any standard OTLP collector (Jaeger/Tempo/Grafana/Honeycomb all accept OTLP-JSON on `/v1/traces`), at the cost of ~200 lines of exporter code the project owns — the same trade it already made for Prometheus.
+
+**OTLP-JSON encoding rules the exporter must honor** (offline-tested in `otlpjson_test.go`):
+- `traceId`/`spanId`/`parentSpanId`: lowercase **hex** strings (the OTLP-JSON special case for ID fields; the SDK's `TraceID.String()`/`SpanID.String()` already emit this — *not* base64).
+- 64-bit numerics (`startTimeUnixNano`, `endTimeUnixNano`, attribute `intValue`): decimal **strings** (JSON cannot hold uint64 safely).
+- `span.kind`: integer enum — OTel `trace.SpanKind` values match the OTLP enum (cast directly).
+- `status.code`: integer enum — **must be remapped**: OTel SDK `codes` is `Unset=0, Error=1, Ok=2` but the OTLP proto enum is `Unset=0, Ok=1, Error=2`. A naive `int(status.Code)` cast silently turns every error span into "OK".
+
+**What this revision supersedes:** the "Dependency footprint & version pinning" section below (the exporter module and its transitive-protobuf description) and the `Init` bullet's "builds the OTLP/HTTP exporter (`otlptracehttp.New`…)" clause — `Init` now builds the custom `otlpjson` exporter and wraps it in the SDK batch processor instead. Everything else (span tree, async submit→run propagation, log↔trace correlation, config flags, shutdown flush, off-by-default no-op gating) is exporter-agnostic and unchanged.
 
 ## Motivation
 

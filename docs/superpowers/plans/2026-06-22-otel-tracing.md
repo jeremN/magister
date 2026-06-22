@@ -6,12 +6,13 @@
 
 **Architecture:** A new `internal/otelx` package owns all OTel SDK contact (provider build + no-op gating + the log-correlation slog handler). Instrumented packages (`engine`, `api`, `supervisor`) use only the OTel **API** via a package-level `var tracer = otel.Tracer("concentus")` — a no-op until the daemon installs an SDK provider, so disabled = byte-for-byte today's runtime. The daemon wires the provider when `-otel-endpoint` is set and flushes it on drain.
 
-**Tech Stack:** Go 1.22 stdlib + OpenTelemetry-Go (API + SDK + `otlptracehttp` exporter, protobuf, **no grpc**).
+**Tech Stack:** Go 1.22 stdlib + OpenTelemetry-Go (API + SDK only) + a **hand-rolled OTLP/HTTP-JSON span exporter** (net/http). No official OTLP exporter module, no grpc, no protobuf. (See the spec's "Revision (2026-06-22)" for why: the official `otlptracehttp` exporter compiles 59 grpc packages into the binary and forces `go 1.22.7`.)
 
 ## Global Constraints
 
-- Go 1.22; **`go.mod`'s `go 1.22` line is NOT bumped.** OTel deps pinned to the latest versions whose own `go.mod` `go` directive is ≤ 1.22 (no release requiring go 1.23+). Existing pinned deps untouched.
-- **Dependency containment:** the SDK, exporter, `sdk/resource`, and `propagation` (in `otelx`) are imported only by `internal/otelx` and `cmd/magisterd`; instrumented packages import only the OTel **API** — `go.opentelemetry.io/otel`, `…/otel/trace`, `…/otel/attribute`, `…/otel/codes` — plus `…/otel/propagation` in `internal/api` (HTTP header carrier; core, lightweight). **No `google.golang.org/grpc` in `go.mod`.**
+- Go 1.22; **`go.mod`'s `go 1.22` line is NOT bumped.** OTel deps pinned to **v1.32.0** (the whole v1.32.0 train declares bare `go 1.22`; without the official exporter module, `proto/otlp`/`auto/sdk` are not pulled, so the directive stays `go 1.22`). Existing pinned deps untouched.
+- **Exactly three new direct deps, all OTel, all bare `go 1.22`, ZERO grpc/protobuf/exporter-module:** `go.opentelemetry.io/otel` (API) · `go.opentelemetry.io/otel/trace` (API) · `go.opentelemetry.io/otel/sdk` (provider/batcher/resource). `otel/metric` enters only as a pure indirect of the SDK. **`go.mod` must contain no `google.golang.org/grpc`, no `go.opentelemetry.io/proto/otlp`, no `…/exporters/otlp/…`.**
+- **Dependency containment:** the SDK, `sdk/resource`, `propagation`, and the custom exporter (in `otelx`) are imported only by `internal/otelx` and `cmd/magisterd`; instrumented packages import only the OTel **API** — `go.opentelemetry.io/otel`, `…/otel/trace`, `…/otel/attribute`, `…/otel/codes` — plus `…/otel/propagation` in `internal/api` (HTTP header carrier; core, lightweight).
 - **Off by default ⇒ byte-for-byte** today's runtime: no spans, no exporter, no network, unchanged log output. The existing test suites of `engine`/`api`/`supervisor` (which install no provider) must stay green unchanged — that IS the regression proof.
 - Telemetry is **never fatal**: exporter init / export / flush failures are logged at warn and the daemon continues.
 - No new SSE event kind, migration, or schema change; run lifecycle + HTTP status mappings unchanged.
@@ -21,9 +22,10 @@
 
 ## File Structure
 
-- `internal/otelx/otelx.go` — `Config`, `Init` (provider build + global install + propagator), `tracesURL` helper. **The only new SDK/exporter importer besides main.**
+- `internal/otelx/otelx.go` — `Config`, `Init` (provider build with the custom exporter + global install + propagator), `tracesURL` helper. **One of only two new SDK importers (with main).**
+- `internal/otelx/otlpjson.go` — the hand-rolled `sdktrace.SpanExporter`: serializes spans to OTLP-JSON and POSTs to `{endpoint}/v1/traces` over net/http. No grpc/proto.
 - `internal/otelx/loghandler.go` — `NewLogHandler` decorator slog.Handler (adds trace_id/span_id).
-- `internal/otelx/otelx_test.go`, `internal/otelx/loghandler_test.go`.
+- `internal/otelx/otelx_test.go`, `internal/otelx/otlpjson_test.go`, `internal/otelx/loghandler_test.go`.
 - `internal/engine/engine.go` — package `var tracer`; run/step/agent/gate/join spans; existing Debug lines → `…Context`.
 - `internal/engine/trace_test.go` — span-tree assertions with a `tracetest` recorder.
 - `internal/api/middleware.go` — `tracingMiddleware`; `internal/api/router.go` — add it to the chain.
@@ -37,32 +39,36 @@
 ## Task 1: `internal/otelx` — provider, log-correlation handler, dependencies
 
 **Files:**
-- Create: `internal/otelx/otelx.go`, `internal/otelx/loghandler.go`, `internal/otelx/otelx_test.go`, `internal/otelx/loghandler_test.go`
+- Create: `internal/otelx/otelx.go`, `internal/otelx/otlpjson.go`, `internal/otelx/loghandler.go`, `internal/otelx/otelx_test.go`, `internal/otelx/otlpjson_test.go`, `internal/otelx/loghandler_test.go`
 - Modify: `go.mod`, `go.sum` (via `go get` + `go mod tidy`)
 
 **Interfaces:**
-- Produces: `otelx.Config{Endpoint, ServiceName, ServiceVersion string}`; `func otelx.Init(ctx context.Context, cfg Config) (*sdktrace.TracerProvider, error)` — returns `(nil, nil)` when `Endpoint==""`; `func otelx.NewLogHandler(inner slog.Handler) slog.Handler`. Task 4 consumes both.
+- Produces: `otelx.Config{Endpoint, ServiceName, ServiceVersion string}`; `func otelx.Init(ctx context.Context, cfg Config) (*sdktrace.TracerProvider, error)` — returns `(nil, nil)` when `Endpoint==""`; `func otelx.NewLogHandler(inner slog.Handler) slog.Handler`. Task 4 consumes both. Internal: `newOTLPJSONExporter(tracesURL string) *otlpJSONExporter` implementing `sdktrace.SpanExporter`.
 
-- [ ] **Step 1: Add the dependencies (pinned for go 1.22)**
+- [ ] **Step 1: Add the dependencies (three OTel modules, v1.32.0, no exporter module)**
 
-Run (start with the v1.33.0 release train; the matching exporter module shares the tag):
+The deps land when `go mod tidy` runs *after* the source files import them (Steps 2–4 import `otel`, `otel/trace`, `otel/sdk/...`). So write the source first, then in Step 6 run:
 ```bash
-go get go.opentelemetry.io/otel@v1.33.0 go.opentelemetry.io/otel/sdk@v1.33.0 go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp@v1.33.0
+go get go.opentelemetry.io/otel@v1.32.0 go.opentelemetry.io/otel/trace@v1.32.0 go.opentelemetry.io/otel/sdk@v1.32.0
 go mod tidy
 go build ./...
 ```
-Expected: builds clean under go 1.22. **If the build/toolchain complains that an OTel module requires go ≥ 1.23, step the three versions down together (try v1.32.0, then v1.31.0) until `go build ./...` succeeds, and confirm `go.mod`'s module line still says `go 1.22`** (do not let `go mod tidy` bump it — if it did, revert that line to `go 1.22` and re-tidy). Then verify no grpc:
+**Do NOT** `go get` any `…/exporters/otlp/…` module — that is the whole point of this revision (it would re-introduce grpc + proto + `go 1.22.7`). After tidy, the go directive must read **`go 1.22`** (bare). If `go mod tidy` raised it (it won't, with only these three deps), `go mod edit -go=1.22 && go mod tidy` and confirm it holds. Then the footprint gate — all three must pass:
 ```bash
-grep -q google.golang.org/grpc go.mod && echo "FAIL: grpc pulled in" || echo "OK: no grpc"
+grep -nE '^go ' go.mod                                  # MUST be: go 1.22
+grep google.golang.org/grpc go.mod || echo "OK: no grpc"
+grep -E 'proto/otlp|exporters/otlp' go.mod || echo "OK: no otlp exporter/proto"
 ```
-Expected: `OK: no grpc`.
+Expected: `go 1.22`, `OK: no grpc`, `OK: no otlp exporter/proto`.
 
 - [ ] **Step 2: Write `internal/otelx/otelx.go`**
 
 ```go
 // Package otelx wires OpenTelemetry tracing for magisterd. It is the only package
-// (besides cmd/magisterd) that imports the OTel SDK + exporter; instrumented packages
-// use only the OTel API (otel.Tracer), which is a no-op until Init installs a provider.
+// (besides cmd/magisterd) that imports the OTel SDK; instrumented packages use only
+// the OTel API (otel.Tracer), which is a no-op until Init installs a provider. Spans
+// are exported by a hand-rolled OTLP/HTTP-JSON exporter (otlpjson.go) — no grpc, no
+// protobuf, no official exporter module.
 package otelx
 
 import (
@@ -72,7 +78,6 @@ import (
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -85,17 +90,14 @@ type Config struct {
 	ServiceVersion string // service.version resource attr
 }
 
-// Init installs a global OTLP/HTTP TracerProvider and the W3C TraceContext propagator,
-// returning the provider so the caller can Shutdown it. Returns (nil, nil) when
-// cfg.Endpoint == "" — tracing disabled, the global stays the built-in no-op provider.
-// The exporter is lazy (it connects on first export), so Init performs no network I/O.
+// Init installs a global TracerProvider (custom OTLP/HTTP-JSON exporter + batch
+// processor) and the W3C TraceContext propagator, returning the provider so the
+// caller can Shutdown it. Returns (nil, nil) when cfg.Endpoint == "" — tracing
+// disabled, the global stays the built-in no-op provider. The exporter does no
+// network I/O until the batch processor flushes its first span, so Init never blocks.
 func Init(ctx context.Context, cfg Config) (*sdktrace.TracerProvider, error) {
 	if cfg.Endpoint == "" {
 		return nil, nil
-	}
-	exp, err := otlptracehttp.New(ctx, otlptracehttp.WithEndpointURL(tracesURL(cfg.Endpoint)))
-	if err != nil {
-		return nil, err
 	}
 	name := cfg.ServiceName
 	if name == "" {
@@ -109,7 +111,7 @@ func Init(ctx context.Context, cfg Config) (*sdktrace.TracerProvider, error) {
 		return nil, err
 	}
 	tp := sdktrace.NewTracerProvider(
-		sdktrace.WithBatcher(exp),
+		sdktrace.WithBatcher(newOTLPJSONExporter(tracesURL(cfg.Endpoint))),
 		sdktrace.WithResource(res),
 	)
 	otel.SetTracerProvider(tp)
@@ -119,8 +121,7 @@ func Init(ctx context.Context, cfg Config) (*sdktrace.TracerProvider, error) {
 
 // tracesURL ensures the OTLP/HTTP traces path: a base URL with no path (e.g.
 // "http://host:4318") gets "/v1/traces" appended; a URL that already has a path is
-// left unchanged. A malformed URL is passed through with the suffix (otlptracehttp.New
-// then surfaces the parse error).
+// left unchanged.
 func tracesURL(endpoint string) string {
 	if u, err := url.Parse(endpoint); err == nil && u.Path != "" && u.Path != "/" {
 		return endpoint
@@ -129,7 +130,187 @@ func tracesURL(endpoint string) string {
 }
 ```
 
-- [ ] **Step 3: Write `internal/otelx/loghandler.go`**
+- [ ] **Step 3: Write `internal/otelx/otlpjson.go` (the hand-rolled exporter)**
+
+A `sdktrace.SpanExporter` that serializes a batch of spans to OTLP-JSON and POSTs it to `{endpoint}/v1/traces`. Honors the four encoding rules (hex IDs, string nanos, kind-as-int, **status-code remap**). Imports only stdlib + the OTel SDK/API — no grpc, no proto.
+
+```go
+package otelx
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"strconv"
+	"time"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+)
+
+// otlpJSONExporter implements sdktrace.SpanExporter by POSTing spans to an OTLP/HTTP
+// collector encoded as OTLP-JSON (Content-Type: application/json). It depends only on
+// net/http + the OTel SDK — no grpc, no protobuf, no exporter module.
+type otlpJSONExporter struct {
+	endpoint string // full traces URL, e.g. http://collector:4318/v1/traces
+	client   *http.Client
+}
+
+func newOTLPJSONExporter(tracesURL string) *otlpJSONExporter {
+	return &otlpJSONExporter{endpoint: tracesURL, client: &http.Client{Timeout: 10 * time.Second}}
+}
+
+func (e *otlpJSONExporter) ExportSpans(ctx context.Context, spans []sdktrace.ReadOnlySpan) error {
+	if len(spans) == 0 {
+		return nil
+	}
+	body, err := json.Marshal(buildTracesPayload(spans))
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e.endpoint, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := e.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		return fmt.Errorf("otlp-json export: %s", resp.Status)
+	}
+	return nil
+}
+
+func (e *otlpJSONExporter) Shutdown(context.Context) error { return nil }
+
+// --- OTLP-JSON wire structs (the subset we emit; camelCase = proto3 JSON) ---
+
+type otlpPayload struct {
+	ResourceSpans []otlpResourceSpans `json:"resourceSpans"`
+}
+type otlpResourceSpans struct {
+	Resource   otlpResource     `json:"resource"`
+	ScopeSpans []otlpScopeSpans `json:"scopeSpans"`
+}
+type otlpResource struct {
+	Attributes []otlpKeyValue `json:"attributes,omitempty"`
+}
+type otlpScopeSpans struct {
+	Scope otlpScope  `json:"scope"`
+	Spans []otlpSpan `json:"spans"`
+}
+type otlpScope struct {
+	Name string `json:"name,omitempty"`
+}
+type otlpSpan struct {
+	TraceID           string         `json:"traceId"`
+	SpanID            string         `json:"spanId"`
+	ParentSpanID      string         `json:"parentSpanId,omitempty"`
+	Name              string         `json:"name"`
+	Kind              int            `json:"kind"`
+	StartTimeUnixNano string         `json:"startTimeUnixNano"`
+	EndTimeUnixNano   string         `json:"endTimeUnixNano"`
+	Attributes        []otlpKeyValue `json:"attributes,omitempty"`
+	Status            otlpStatus     `json:"status"`
+}
+type otlpStatus struct {
+	Code    int    `json:"code"`
+	Message string `json:"message,omitempty"`
+}
+type otlpKeyValue struct {
+	Key   string       `json:"key"`
+	Value otlpAnyValue `json:"value"`
+}
+type otlpAnyValue struct {
+	StringValue *string  `json:"stringValue,omitempty"`
+	BoolValue   *bool    `json:"boolValue,omitempty"`
+	IntValue    *string  `json:"intValue,omitempty"` // int64 as decimal string
+	DoubleValue *float64 `json:"doubleValue,omitempty"`
+}
+
+func buildTracesPayload(spans []sdktrace.ReadOnlySpan) otlpPayload {
+	res := otlpResource{Attributes: kvList(spans[0].Resource().Attributes())}
+	byScope := map[string][]otlpSpan{}
+	var order []string
+	for _, s := range spans {
+		name := s.InstrumentationScope().Name
+		if _, ok := byScope[name]; !ok {
+			order = append(order, name)
+		}
+		byScope[name] = append(byScope[name], toOTLPSpan(s))
+	}
+	scopeSpans := make([]otlpScopeSpans, 0, len(order))
+	for _, name := range order {
+		scopeSpans = append(scopeSpans, otlpScopeSpans{Scope: otlpScope{Name: name}, Spans: byScope[name]})
+	}
+	return otlpPayload{ResourceSpans: []otlpResourceSpans{{Resource: res, ScopeSpans: scopeSpans}}}
+}
+
+func toOTLPSpan(s sdktrace.ReadOnlySpan) otlpSpan {
+	sc := s.SpanContext()
+	out := otlpSpan{
+		TraceID:           sc.TraceID().String(), // SDK emits lowercase hex
+		SpanID:            sc.SpanID().String(),
+		Name:              s.Name(),
+		Kind:              int(s.SpanKind()), // OTel SpanKind values match the OTLP enum
+		StartTimeUnixNano: strconv.FormatInt(s.StartTime().UnixNano(), 10),
+		EndTimeUnixNano:   strconv.FormatInt(s.EndTime().UnixNano(), 10),
+		Attributes:        kvList(s.Attributes()),
+		Status:            otlpStatus{Code: otlpStatusCode(s.Status().Code), Message: s.Status().Description},
+	}
+	if p := s.Parent(); p.HasSpanID() {
+		out.ParentSpanID = p.SpanID().String()
+	}
+	return out
+}
+
+// otlpStatusCode remaps OTel SDK status codes to the OTLP proto enum. They DIFFER:
+// SDK codes are Unset=0, Error=1, Ok=2; OTLP is Unset=0, Ok=1, Error=2. A direct cast
+// would turn every error span into "OK".
+func otlpStatusCode(c codes.Code) int {
+	switch c {
+	case codes.Ok:
+		return 1
+	case codes.Error:
+		return 2
+	default:
+		return 0
+	}
+}
+
+func kvList(attrs []attribute.KeyValue) []otlpKeyValue {
+	out := make([]otlpKeyValue, 0, len(attrs))
+	for _, a := range attrs {
+		out = append(out, otlpKeyValue{Key: string(a.Key), Value: anyValue(a.Value)})
+	}
+	return out
+}
+
+func anyValue(v attribute.Value) otlpAnyValue {
+	switch v.Type() {
+	case attribute.BOOL:
+		b := v.AsBool()
+		return otlpAnyValue{BoolValue: &b}
+	case attribute.INT64:
+		s := strconv.FormatInt(v.AsInt64(), 10)
+		return otlpAnyValue{IntValue: &s}
+	case attribute.FLOAT64:
+		f := v.AsFloat64()
+		return otlpAnyValue{DoubleValue: &f}
+	default:
+		s := v.AsString()
+		return otlpAnyValue{StringValue: &s}
+	}
+}
+```
+
+- [ ] **Step 4: Write `internal/otelx/loghandler.go`**
 
 ```go
 package otelx
@@ -175,7 +356,7 @@ func (h logHandler) WithGroup(name string) slog.Handler {
 }
 ```
 
-- [ ] **Step 4: Write the tests**
+- [ ] **Step 5: Write the tests**
 
 `internal/otelx/otelx_test.go`:
 ```go
@@ -221,6 +402,91 @@ func TestTracesURL(t *testing.T) {
 			t.Errorf("tracesURL(%q) = %q, want %q", in, got, want)
 		}
 	}
+}
+```
+
+`internal/otelx/otlpjson_test.go` (validates the wire-format rules offline — an httptest server captures the POST body):
+```go
+package otelx
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"regexp"
+	"testing"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/sdk/resource"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/trace"
+)
+
+func TestOTLPJSONExporterEncodesSpan(t *testing.T) {
+	var body []byte
+	var contentType string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		contentType = r.Header.Get("Content-Type")
+		body, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	exp := newOTLPJSONExporter(srv.URL)
+	res, _ := resource.New(context.Background(), resource.WithAttributes(attribute.String("service.name", "test")))
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exp), sdktrace.WithResource(res)) // WithSyncer = export on End
+	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
+
+	_, span := tp.Tracer("concentus").Start(context.Background(), "run x",
+		trace.WithAttributes(attribute.Int("magister.attempt", 3)))
+	span.SetStatus(codes.Error, "boom")
+	span.End() // exports synchronously; the POST completes before End returns
+
+	if contentType != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", contentType)
+	}
+	var p map[string]any
+	if err := json.Unmarshal(body, &p); err != nil {
+		t.Fatalf("payload not JSON: %v\n%s", err, body)
+	}
+	sp := drillToSpan(t, p)
+
+	// (1) traceId: 32 lowercase hex, NOT base64
+	if tid, _ := sp["traceId"].(string); !regexp.MustCompile(`^[0-9a-f]{32}$`).MatchString(tid) {
+		t.Errorf("traceId = %q, want 32-hex", tid)
+	}
+	// (2) startTimeUnixNano: a JSON STRING, not a number
+	if _, ok := sp["startTimeUnixNano"].(string); !ok {
+		t.Errorf("startTimeUnixNano = %v (%T), want string", sp["startTimeUnixNano"], sp["startTimeUnixNano"])
+	}
+	// (3) status.code: remapped to OTLP ERROR=2 (NOT the SDK's Error=1)
+	if st := sp["status"].(map[string]any); st["code"].(float64) != 2 {
+		t.Errorf("status.code = %v, want 2 (OTLP ERROR)", st["code"])
+	}
+	// (4) int attribute: encoded as a STRING intValue
+	found := false
+	for _, a := range sp["attributes"].([]any) {
+		kv := a.(map[string]any)
+		if kv["key"] == "magister.attempt" {
+			found = true
+			if iv, ok := kv["value"].(map[string]any)["intValue"].(string); !ok || iv != "3" {
+				t.Errorf("magister.attempt intValue = %v, want string \"3\"", kv["value"])
+			}
+		}
+	}
+	if !found {
+		t.Error("magister.attempt attribute missing from payload")
+	}
+}
+
+func drillToSpan(t *testing.T, p map[string]any) map[string]any {
+	t.Helper()
+	rs := p["resourceSpans"].([]any)[0].(map[string]any)
+	ss := rs["scopeSpans"].([]any)[0].(map[string]any)
+	return ss["spans"].([]any)[0].(map[string]any)
 }
 ```
 
@@ -287,16 +553,25 @@ func TestLogHandlerSurvivesWith(t *testing.T) {
 }
 ```
 
-- [ ] **Step 5: Run the tests**
+- [ ] **Step 6: Run the deps + tidy + footprint gate + tests**
 
-Run: `go test ./internal/otelx/ -count=1`
-Expected: PASS (5 tests). gofmt + vet: `gofmt -l internal/otelx/ ; go vet ./internal/otelx/` → no output.
+Now that the source imports `otel`/`otel/trace`/`otel/sdk/...`, materialize and verify the deps (Step 1's commands), then run the suite (the `go get`/`tidy`/`build` need network — disable the sandbox for those):
+```bash
+go get go.opentelemetry.io/otel@v1.32.0 go.opentelemetry.io/otel/trace@v1.32.0 go.opentelemetry.io/otel/sdk@v1.32.0
+go mod tidy
+grep -nE '^go ' go.mod                                   # MUST be: go 1.22
+grep google.golang.org/grpc go.mod || echo "OK: no grpc"
+grep -E 'proto/otlp|exporters/otlp' go.mod || echo "OK: no otlp exporter/proto"
+go build ./...
+go test ./internal/otelx/ -count=1
+```
+Expected: `go 1.22`; `OK: no grpc`; `OK: no otlp exporter/proto`; build clean; PASS (6 tests: 3 otelx + 1 otlpjson + 3 loghandler... = TestInitDisabled, TestInitEnabled, TestTracesURL, TestOTLPJSONExporterEncodesSpan, TestLogHandlerAddsSpanIDsWhenSpanActive, TestLogHandlerNoSpanNoIDs, TestLogHandlerSurvivesWith). gofmt + vet: `gofmt -l internal/otelx/ ; go vet ./internal/otelx/` → no output.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add internal/otelx/ go.mod go.sum
-git commit -m "feat(otelx): OTLP/HTTP tracer provider + log-correlation slog handler"
+git commit -m "feat(otelx): tracer provider + OTLP/HTTP-JSON exporter + log-correlation handler"
 ```
 
 ---

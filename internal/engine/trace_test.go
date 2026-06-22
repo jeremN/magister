@@ -67,6 +67,9 @@ func TestEngineEmitsSpanTree(t *testing.T) {
 	if p := byName["step greet"].Parent().SpanID(); p != run.SpanContext().SpanID() {
 		t.Errorf("step greet parent = %v, want run span %v", p, run.SpanContext().SpanID())
 	}
+	if p := byName["agent mock"].Parent().SpanID(); p != byName["step greet"].SpanContext().SpanID() {
+		t.Errorf("agent mock parent = %v, want step greet span %v", p, byName["step greet"].SpanContext().SpanID())
+	}
 }
 
 func names(spans []sdktrace.ReadOnlySpan) []string {

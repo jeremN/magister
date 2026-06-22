@@ -172,12 +172,13 @@ func run(args []string, env func(string) string, stopCh <-chan struct{}, onListe
 	sup.Shutdown(cfg.ShutdownTimeout) // cancel active runs first
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer cancel()
+	err = httpSrv.Shutdown(shutdownCtx)
 	if tp != nil {
-		if err := tp.Shutdown(shutdownCtx); err != nil {
-			log.Warn("otel tracer shutdown", "err", err)
+		if terr := tp.Shutdown(shutdownCtx); terr != nil {
+			log.Warn("otel tracer shutdown", "err", terr)
 		}
 	}
-	return httpSrv.Shutdown(shutdownCtx)
+	return err
 }
 
 // runScratchJanitor periodically reclaims the scratch of terminal runs past the

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"time"
@@ -43,7 +44,10 @@ func (e *otlpJSONExporter) ExportSpans(ctx context.Context, spans []sdktrace.Rea
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}()
 	if resp.StatusCode/100 != 2 {
 		return fmt.Errorf("otlp-json export: %s", resp.Status)
 	}
@@ -97,6 +101,7 @@ type otlpAnyValue struct {
 	DoubleValue *float64 `json:"doubleValue,omitempty"`
 }
 
+// buildTracesPayload assumes all spans share a single resource (the provider's) and groups them by instrumentation scope.
 func buildTracesPayload(spans []sdktrace.ReadOnlySpan) otlpPayload {
 	res := otlpResource{Attributes: kvList(spans[0].Resource().Attributes())}
 	byScope := map[string][]otlpSpan{}

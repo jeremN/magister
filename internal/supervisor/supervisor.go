@@ -24,6 +24,7 @@ import (
 	"concentus/internal/workspace"
 )
 
+// tracer is shared by the delivery spans in pr.go and ship.go too.
 var tracer = otel.Tracer("concentus")
 
 // Supervisor owns all active runs: it persists+starts new ones, cancels them,

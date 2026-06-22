@@ -226,6 +226,33 @@ func TestPRNon200PrintsError(t *testing.T) {
 	}
 }
 
+func TestPRHeadRepoSendsHeadRepoJSONField(t *testing.T) {
+	var body []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		writeBody(w, `{"url":"https://github.com/o/r/pull/1"}`)
+	}))
+	defer srv.Close()
+
+	var out bytes.Buffer
+	code := dispatch([]string{"pr", "r1", "--head-repo", "https://github.com/fork/r.git"}, srv.URL, &out)
+	if code != 0 {
+		t.Fatalf("exit = %d, out=%s", code, out.String())
+	}
+	var sent map[string]any
+	if err := json.Unmarshal(body, &sent); err != nil {
+		t.Fatalf("body not json: %v", err)
+	}
+	if sent["head_repo"] != "https://github.com/fork/r.git" {
+		t.Errorf("head_repo = %v, want the fork url; body=%s", sent["head_repo"], body)
+	}
+	if _, hyphen := sent["head-repo"]; hyphen {
+		t.Errorf("body used the hyphenated key head-repo; want head_repo; body=%s", body)
+	}
+}
+
 func TestShipSendsJSONBodyAndPrintsOpened(t *testing.T) {
 	var got http.Request
 	var body []byte

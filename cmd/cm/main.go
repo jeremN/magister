@@ -310,6 +310,13 @@ func (c *client) pr(args []string, out io.Writer) int {
 		switch args[i] {
 		case "--draft":
 			body["draft"] = true
+		case "--head-repo":
+			i++
+			if i >= len(args) {
+				fmt.Fprintln(out, "usage: --head-repo requires a value")
+				return 2
+			}
+			body["head_repo"] = args[i]
 		case "--remote", "--as", "--step", "--base", "--title", "--body":
 			flag := args[i]
 			i++
@@ -323,7 +330,7 @@ func (c *client) pr(args []string, out io.Writer) int {
 		}
 	}
 	if run == "" {
-		fmt.Fprintln(out, "usage: cm pr <run> [--remote <url-or-name>] [--as <branch>] [--step <id>] [--base <branch>] [--title <t>] [--body <b>] [--draft]")
+		fmt.Fprintln(out, "usage: cm pr <run> [--remote <url-or-name>] [--head-repo <url-or-name>] [--as <branch>] [--step <id>] [--base <branch>] [--title <t>] [--body <b>] [--draft]")
 		return 2
 	}
 	payload, _ := json.Marshal(body)

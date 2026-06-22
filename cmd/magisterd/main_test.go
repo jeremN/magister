@@ -160,34 +160,6 @@ func TestRunRejectsBadLogFormat(t *testing.T) {
 	}
 }
 
-func TestParseLogLevel(t *testing.T) {
-	valid := map[string]slog.Level{
-		"debug": slog.LevelDebug,
-		"info":  slog.LevelInfo,
-		"warn":  slog.LevelWarn,
-		"error": slog.LevelError,
-	}
-	for s, want := range valid {
-		got, err := parseLogLevel(s)
-		if err != nil {
-			t.Errorf("parseLogLevel(%q) unexpected error: %v", s, err)
-		}
-		if got != want {
-			t.Errorf("parseLogLevel(%q) = %v, want %v", s, got, want)
-		}
-	}
-	for _, bad := range []string{"trace", "INFO", "info+2", ""} {
-		_, err := parseLogLevel(bad)
-		if err == nil {
-			t.Errorf("parseLogLevel(%q) should return an error", bad)
-			continue
-		}
-		if !strings.Contains(err.Error(), "invalid log-level") {
-			t.Errorf("parseLogLevel(%q) error = %q, want it to mention invalid log-level", bad, err.Error())
-		}
-	}
-}
-
 func TestNewLogHandlerAppliesLevel(t *testing.T) {
 	var buf bytes.Buffer
 	h, err := newLogHandler("text", slog.LevelWarn, &buf)

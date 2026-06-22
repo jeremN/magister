@@ -14,6 +14,10 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sync/semaphore"
 
 	"concentus/internal/core"
@@ -27,6 +31,9 @@ import (
 
 // Compile-time assertion: *event.Bus satisfies core.Publisher.
 var _ core.Publisher = (*event.Bus)(nil)
+
+// tracer is the engine's OTel tracer; a no-op until the daemon installs an SDK provider.
+var tracer = otel.Tracer("concentus")
 
 type Engine struct {
 	Execs map[string]core.Executor // registry: "opus"→CLIAgent, …, "mock"→Mock
@@ -96,6 +103,9 @@ func (e *Engine) Resume(parent context.Context, rs core.RunState, f *flow.Flow) 
 func (e *Engine) runDAG(parent context.Context, runID core.RunID, f *flow.Flow, seed map[string]core.Result) error {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
+	ctx, span := tracer.Start(ctx, "run "+string(runID),
+		trace.WithAttributes(attribute.String("magister.run_id", string(runID)), attribute.String("magister.flow", f.Name)))
+	defer span.End()
 
 	if err := e.Store.SetRunStatus(ctx, runID, core.RunRunning, ""); err != nil {
 		e.logger().Error("set run status running", "run", runID, "err", err)
@@ -192,13 +202,20 @@ func (e *Engine) runDAG(parent context.Context, runID core.RunID, f *flow.Flow, 
 			if ctx.Err() != nil {
 				return
 			}
-			e.logger().Debug("step slot acquired", "run", string(runID), "step", s.ID, "waited", e.Clock.Now().Sub(queueStart))
+			e.logger().DebugContext(ctx, "step slot acquired", "run", string(runID), "step", s.ID, "waited", e.Clock.Now().Sub(queueStart))
 			e.Metrics.StepStarted()
 			defer e.Metrics.StepFinished()
 
 			// 4. run the step (execute + gate, with retries).
 			stepStart := e.Clock.Now()
-			res, err := e.runStep(ctx, runID, s, inputs)
+			stepCtx, stepSpan := tracer.Start(ctx, "step "+s.ID,
+				trace.WithAttributes(attribute.String("magister.step_id", s.ID)))
+			res, err := e.runStep(stepCtx, runID, s, inputs)
+			if err != nil {
+				stepSpan.RecordError(err)
+				stepSpan.SetStatus(codes.Error, err.Error())
+			}
+			stepSpan.End()
 			stepDur := e.Clock.Now().Sub(stepStart)
 			if err != nil {
 				e.Metrics.ObserveStep("failed", stepDur)
@@ -219,6 +236,14 @@ func (e *Engine) runDAG(parent context.Context, runID core.RunID, f *flow.Flow, 
 	// final status write so observers who poll "succeeded" see a clean wt/. Best-effort.
 	if err := e.WS.TeardownRun(runID); err != nil {
 		e.logger().Error("teardown run workspaces", "run", runID, "err", err)
+	}
+
+	switch {
+	case parent.Err() != nil:
+		span.SetStatus(codes.Error, "canceled")
+	case firstErr != nil:
+		span.RecordError(firstErr)
+		span.SetStatus(codes.Error, firstErr.Error())
 	}
 
 	final := context.WithoutCancel(ctx)
@@ -311,7 +336,7 @@ func (e *Engine) runStep(ctx context.Context, runID core.RunID, s *flow.Step, in
 		if s.Join != nil && s.Join.OnConflict == flow.FailEscalate {
 			return e.escalateJoin(ctx, runID, s, inputs, workDir, lastErr, attempt)
 		}
-		e.logger().Warn("retry budget exhausted", "run", string(runID), "step", s.ID, "attempts", attempt, "last_err", lastErr, "escalating", gateFailed && gateEscalates(s))
+		e.logger().WarnContext(ctx, "retry budget exhausted", "run", string(runID), "step", s.ID, "attempts", attempt, "last_err", lastErr, "escalating", gateFailed && gateEscalates(s))
 		// A failed auto/conditional gate with on_fail=escalate becomes a human approval.
 		if gateFailed && gateEscalates(s) {
 			return e.escalate(ctx, runID, s, res, workDir, lastErr, attempt)
@@ -355,12 +380,22 @@ func (e *Engine) attempt(ctx context.Context, runID core.RunID, s *flow.Step, in
 			event.Event{StepID: s.ID, Kind: event.GateAwaiting, Attempt: attemptNum})
 		e.Metrics.GateAwaited()
 	}
+	gateCtx, gateSpan := tracer.Start(gateCtx, "gate "+s.ID,
+		trace.WithAttributes(attribute.String("magister.gate_policy", string(gatePolicyOf(s)))))
 	ok, gerr := e.Gate.Evaluate(gateCtx, runID, s, res, workDir)
+	switch {
+	case gerr != nil:
+		gateSpan.RecordError(gerr)
+		gateSpan.SetStatus(codes.Error, gerr.Error())
+	case !ok:
+		gateSpan.SetStatus(codes.Error, "gate failed")
+	}
+	gateSpan.End()
 	gargs := []any{"run", string(runID), "step", s.ID, "attempt", attemptNum, "policy", gatePolicyOf(s), "pass", ok}
 	if gerr != nil {
 		gargs = append(gargs, "err", gerr)
 	}
-	e.logger().Debug("gate evaluated", gargs...)
+	e.logger().DebugContext(gateCtx, "gate evaluated", gargs...)
 	switch {
 	case gerr != nil:
 		return res, false, gerr
@@ -390,8 +425,13 @@ func (e *Engine) runAgent(ctx context.Context, runID core.RunID, stepID, role, a
 		}
 		e.Bus.Publish(ev) // Seq is irrelevant on the bus — sse.go re-reads the store for real seqs
 	}
+	ctx, span := tracer.Start(ctx, "agent "+agentName, trace.WithAttributes(
+		attribute.String("magister.agent", agentName),
+		attribute.String("magister.role", role),
+		attribute.Int("magister.attempt", attemptNum)))
+	defer span.End()
 	agentCtx := logctx.With(ctx, e.logger().With("run", string(runID), "step", stepID, "agent", agentName))
-	e.logger().Debug("agent starting", "run", string(runID), "step", stepID, "agent", agentName, "role", role, "attempt", attemptNum)
+	e.logger().DebugContext(ctx, "agent starting", "run", string(runID), "step", stepID, "agent", agentName, "role", role, "attempt", attemptNum)
 	agentStart := e.Clock.Now()
 	res, err := ag.Run(agentCtx, core.Task{
 		RunID:   runID,
@@ -405,11 +445,16 @@ func (e *Engine) runAgent(ctx context.Context, runID core.RunID, stepID, role, a
 	dur := e.Clock.Now().Sub(agentStart)
 	e.Metrics.ObserveAgentRun(agentName, dur) // every invocation, incl. errors
 	e.Metrics.AddCost(agentName, res.CostUSD) // per-invocation; no-op on 0 cost
+	span.SetAttributes(attribute.Float64("magister.cost_usd", res.CostUSD))
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
 	args := []any{"run", string(runID), "step", stepID, "agent", agentName, "attempt", attemptNum, "dur", dur, "cost_usd", res.CostUSD}
 	if err != nil {
 		args = append(args, "err", err)
 	}
-	e.logger().Debug("agent finished", args...)
+	e.logger().DebugContext(ctx, "agent finished", args...)
 	return res, err
 }
 
@@ -426,16 +471,24 @@ func (e *Engine) execute(ctx context.Context, runID core.RunID, s *flow.Step, in
 		run := func(ctx context.Context, agentName, prompt, wd string, in []core.Artifact) (core.Result, error) {
 			return e.runAgent(ctx, runID, s.ID, "arbiter", agentName, prompt, wd, attemptNum, in)
 		}
-		e.logger().Debug("join starting", "run", string(runID), "step", s.ID, "strategy", s.Join.Strategy, "inputs", len(inputs), "attempt", attemptNum)
-		res, err := strat.Join(ctx, s, inputs, workDir, run)
+		e.logger().DebugContext(ctx, "join starting", "run", string(runID), "step", s.ID, "strategy", s.Join.Strategy, "inputs", len(inputs), "attempt", attemptNum)
+		joinCtx, joinSpan := tracer.Start(ctx, "join "+s.ID, trace.WithAttributes(
+			attribute.String("magister.join_strategy", string(s.Join.Strategy)),
+			attribute.Int("magister.join_inputs", len(inputs))))
+		res, err := strat.Join(joinCtx, s, inputs, workDir, run)
+		if err != nil {
+			joinSpan.RecordError(err)
+			joinSpan.SetStatus(codes.Error, err.Error())
+		}
+		joinSpan.End()
 		jargs := []any{"run", string(runID), "step", s.ID, "strategy", s.Join.Strategy, "attempt", attemptNum}
 		if err != nil {
 			jargs = append(jargs, "err", err)
 		}
-		e.logger().Debug("join finished", jargs...)
+		e.logger().DebugContext(ctx, "join finished", jargs...)
 		var conflict *join.ConflictError
 		if errors.As(err, &conflict) {
-			e.logger().Warn("merge conflict detected", "run", string(runID), "step", s.ID, "branch", conflict.Branch, "paths", conflict.Paths, "attempt", attemptNum)
+			e.logger().WarnContext(ctx, "merge conflict detected", "run", string(runID), "step", s.ID, "branch", conflict.Branch, "paths", conflict.Paths, "attempt", attemptNum)
 		}
 		return res, err
 	}

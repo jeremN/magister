@@ -112,7 +112,7 @@ func (s *Supervisor) prCore(ctx context.Context, runID core.RunID, opts PROpts) 
 	}
 
 	runner := s.hostRunner()
-	if url, exists, err := runner.ExistingOpenPR(ctx, owner, repo, head); err != nil {
+	if url, exists, err := runner.ExistingOpenPR(ctx, owner, repo, branch, headOwner); err != nil {
 		return PRResult{}, false, prErr(http.StatusBadGateway, "%v", err)
 	} else if exists {
 		return PRResult{URL: url, Repo: owner + "/" + repo, Head: head, Base: opts.Base, Draft: opts.Draft}, true, nil

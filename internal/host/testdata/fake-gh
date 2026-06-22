@@ -9,8 +9,10 @@ case "$1" in
   pr)
     case "$2" in
       list)
+        # FAKE_GH_EXISTING_PR_OWNER models the head repo owner gh reports for the match,
+        # so ExistingOpenPR's owner filter can be exercised (default owner "o").
         if [ -n "$FAKE_GH_EXISTING_PR" ]; then
-          printf '[{"url":"%s"}]\n' "$FAKE_GH_EXISTING_PR"
+          printf '[{"url":"%s","headRepositoryOwner":{"login":"%s"}}]\n' "$FAKE_GH_EXISTING_PR" "${FAKE_GH_EXISTING_PR_OWNER:-o}"
         else
           printf '[]\n'
         fi

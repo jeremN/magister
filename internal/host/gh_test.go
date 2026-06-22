@@ -69,13 +69,19 @@ func TestRunnerCreatePRFailureSurfacesStderr(t *testing.T) {
 
 func TestRunnerExistingOpenPR(t *testing.T) {
 	r := &Runner{Bin: stubPath(t, "fake-gh")}
-	if url, ok, err := r.ExistingOpenPR(context.Background(), "o", "r", "magister/x"); err != nil || ok || url != "" {
+	if url, ok, err := r.ExistingOpenPR(context.Background(), "o", "r", "magister/x", "o"); err != nil || ok || url != "" {
 		t.Fatalf("want none, got url=%q ok=%v err=%v", url, ok, err)
 	}
 	t.Setenv("FAKE_GH_EXISTING_PR", "https://github.com/o/r/pull/3")
-	url, ok, err := r.ExistingOpenPR(context.Background(), "o", "r", "magister/x")
+	t.Setenv("FAKE_GH_EXISTING_PR_OWNER", "o")
+	url, ok, err := r.ExistingOpenPR(context.Background(), "o", "r", "magister/x", "o")
 	if err != nil || !ok || url != "https://github.com/o/r/pull/3" {
 		t.Fatalf("want existing, got url=%q ok=%v err=%v", url, ok, err)
+	}
+	// A PR whose head lives on a different owner (e.g. another fork with the same
+	// branch name) must NOT be mistaken for ours.
+	if url, ok, err := r.ExistingOpenPR(context.Background(), "o", "r", "magister/x", "someone-else"); err != nil || ok || url != "" {
+		t.Fatalf("want no match for a different head owner, got url=%q ok=%v err=%v", url, ok, err)
 	}
 }
 

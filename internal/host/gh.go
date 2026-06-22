@@ -117,23 +117,34 @@ func (r *Runner) run(ctx context.Context, args ...string) (stdout, stderr string
 	return so.String(), se.String(), err
 }
 
-// ExistingOpenPR returns the URL of an open PR whose head is `head`, if one exists.
-func (r *Runner) ExistingOpenPR(ctx context.Context, owner, repo, head string) (string, bool, error) {
+// ExistingOpenPR reports the URL of an already-open PR whose head is the bare ref
+// branch on headOwner (the base owner for a same-repo PR, the fork owner for a
+// cross-fork PR). NOTE the asymmetry vs CreatePR: `gh pr list --head` matches only a
+// BARE branch name (the owner:branch form returns nothing), so callers pass the bare
+// branch here even when the create head is forkOwner:branch — and we filter the matches
+// by headRepositoryOwner so a same-named branch on a different fork isn't mistaken for
+// ours.
+func (r *Runner) ExistingOpenPR(ctx context.Context, owner, repo, branch, headOwner string) (string, bool, error) {
 	so, se, err := r.run(ctx, "pr", "list",
-		"--repo="+owner+"/"+repo, "--head="+head, "--state=open", "--json=url")
+		"--repo="+owner+"/"+repo, "--head="+branch, "--state=open", "--json=url,headRepositoryOwner")
 	if err != nil {
 		return "", false, fmt.Errorf("gh pr list: %w: %s", err, strings.TrimSpace(se))
 	}
 	var prs []struct {
-		URL string `json:"url"`
+		URL                 string `json:"url"`
+		HeadRepositoryOwner struct {
+			Login string `json:"login"`
+		} `json:"headRepositoryOwner"`
 	}
 	if err := json.Unmarshal([]byte(strings.TrimSpace(so)), &prs); err != nil {
 		return "", false, fmt.Errorf("gh pr list: parse json: %w", err)
 	}
-	if len(prs) == 0 {
-		return "", false, nil
+	for _, pr := range prs {
+		if pr.HeadRepositoryOwner.Login == headOwner {
+			return pr.URL, true, nil
+		}
 	}
-	return prs[0].URL, true, nil
+	return "", false, nil
 }
 
 // CreatePR opens a pull request and returns its URL.

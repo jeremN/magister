@@ -171,6 +171,7 @@ func TestPRExistingOpenPRReturns409(t *testing.T) {
 	st := store.NewMem()
 	sup := newPRSup(t, st)
 	t.Setenv("FAKE_GH_EXISTING_PR", "https://github.com/test-owner/test-repo/pull/2")
+	t.Setenv("FAKE_GH_EXISTING_PR_OWNER", "test-owner") // same-repo head owner == base owner
 	seedExtRun(t, st, "r1", srcWithGHOrigin(t, "https://github.com/test-owner/test-repo.git"))
 	_, err := sup.PR(context.Background(), "r1", PROpts{})
 	if got := prErrStatus(t, err); got != http.StatusConflict {
@@ -222,6 +223,7 @@ func TestPRCoreReportsExistingPR(t *testing.T) {
 	st := store.NewMem()
 	sup := newPRSup(t, st)
 	t.Setenv("FAKE_GH_EXISTING_PR", "https://github.com/test-owner/test-repo/pull/8")
+	t.Setenv("FAKE_GH_EXISTING_PR_OWNER", "test-owner") // same-repo head owner == base owner
 	seedExtRun(t, st, "r1", srcWithGHOrigin(t, "https://github.com/test-owner/test-repo.git"))
 
 	res, existed, err := sup.prCore(context.Background(), "r1", PROpts{})
@@ -233,6 +235,36 @@ func TestPRCoreReportsExistingPR(t *testing.T) {
 	}
 	if res.URL != "https://github.com/test-owner/test-repo/pull/8" {
 		t.Errorf("url = %q, want the existing PR url", res.URL)
+	}
+}
+
+func TestPRFromForkExistingReturns409(t *testing.T) {
+	requireGitS(t)
+	st := store.NewMem()
+	sup := newPRSup(t, st)
+	argv := filepath.Join(t.TempDir(), "argv")
+	t.Setenv("FAKE_GH_ARGV_FILE", argv)
+	t.Setenv("FAKE_GH_EXISTING_PR", "https://github.com/test-owner/test-repo/pull/5")
+	t.Setenv("FAKE_GH_EXISTING_PR_OWNER", "fork-owner") // the open PR's head lives on the fork
+	seedExtRun(t, st, "r1", srcWithGHOrigin(t, "https://github.com/test-owner/test-repo.git"))
+
+	_, err := sup.PR(context.Background(), "r1", PROpts{HeadRepo: "https://github.com/fork-owner/test-repo.git"})
+	if got := prErrStatus(t, err); got != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (cross-fork PR already exists)", got)
+	}
+	var pe *PRError
+	if !errors.As(err, &pe) {
+		t.Fatalf("expected *PRError, got %T", err)
+	}
+	if !strings.Contains(pe.Msg, "pull/5") {
+		t.Errorf("message should carry the existing PR URL, got %q", pe.Msg)
+	}
+	// The existing-PR lookup must query the BARE branch — `gh pr list --head` does not
+	// match the owner:branch form (regression: a cross-fork dup used to slip past the
+	// pre-check and 502 on create).
+	got, _ := os.ReadFile(argv)
+	if !strings.Contains(string(got), "--head=magister/r1\n") {
+		t.Errorf("pr list should query the bare branch --head=magister/r1; argv:\n%s", got)
 	}
 }
 

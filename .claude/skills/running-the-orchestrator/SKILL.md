@@ -76,6 +76,17 @@ pkill -TERM -f /tmp/magisterd    # SIGTERM = graceful shutdown (drains, then exi
 rm -rf /tmp/cm-demo
 ```
 
+## Distributed tracing (optional, OTLP/HTTP-JSON)
+
+Tracing is **off by default** — without `-otel-endpoint` the daemon emits no spans, opens no socket, and the runtime is byte-for-byte unchanged. To enable it, point the daemon at any OTLP collector's HTTP endpoint:
+
+```bash
+/tmp/magisterd -addr 127.0.0.1:8137 -db /tmp/cm-demo/magister.db \
+  -otel-endpoint http://127.0.0.1:4318 -otel-service-name magisterd
+```
+
+`-otel-endpoint` is the collector base URL (`/v1/traces` is appended if absent); the standard `OTEL_EXPORTER_OTLP_ENDPOINT` / `OTEL_SERVICE_NAME` env vars are honored when the flags are unset (flags win). Spans are POSTed as **OTLP-JSON over net/http** (a hand-rolled exporter — no grpc/protobuf dependency, matching the dependency-free Prometheus `/metrics` endpoint). A run produces one connected trace: `POST /v1/runs` → `run <id>` → `step <id>` → `agent <name>` (+ `gate`/`join`, and `push`/`pr`/`ship` under their delivery requests). Run-scoped log lines carry the matching `trace_id`/`span_id`. Point it at a Jaeger/Tempo/Grafana/Honeycomb collector that accepts OTLP-JSON on `:4318`.
+
 ## Git-native joins (merge / select / synthesize)
 
 The `merge` join now does a **real `git merge`** of its upstream branches (no longer a manifest). Requirement: a join step **and every step in its `Needs`** must be `workspace: isolated` — that gives each one a `step/<id>` branch to merge. The validator rejects a non-isolated join or upstream, and rejects `merge` + `on_conflict: escalate` without a `join.agent` (the conflict arbiter). Give fan-in upstreams **auto gates** or they default to manual and block.

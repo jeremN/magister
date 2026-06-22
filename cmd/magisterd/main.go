@@ -26,6 +26,7 @@ import (
 	"concentus/internal/gate"
 	"concentus/internal/join"
 	"concentus/internal/metrics"
+	"concentus/internal/otelx"
 	"concentus/internal/store"
 	"concentus/internal/supervisor"
 	"concentus/internal/workspace"
@@ -89,7 +90,18 @@ func run(args []string, env func(string) string, stopCh <-chan struct{}, onListe
 	if err != nil {
 		return err
 	}
+	h = otelx.NewLogHandler(h)
 	log := slog.New(h)
+
+	tp, err := otelx.Init(context.Background(), otelx.Config{
+		Endpoint:       cfg.OTelEndpoint,
+		ServiceName:    cfg.OTelServiceName,
+		ServiceVersion: metrics.BuildVersion(),
+	})
+	if err != nil {
+		log.Warn("tracing disabled: otel init failed", "err", err)
+		tp = nil
+	}
 
 	st, err := store.Open(cfg.DBPath)
 	if err != nil {
@@ -160,6 +172,11 @@ func run(args []string, env func(string) string, stopCh <-chan struct{}, onListe
 	sup.Shutdown(cfg.ShutdownTimeout) // cancel active runs first
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer cancel()
+	if tp != nil {
+		if err := tp.Shutdown(shutdownCtx); err != nil {
+			log.Warn("otel tracer shutdown", "err", err)
+		}
+	}
 	return httpSrv.Shutdown(shutdownCtx)
 }
 

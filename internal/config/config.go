@@ -19,6 +19,8 @@ type Config struct {
 	ShutdownDrain        time.Duration
 	LogFormat            string
 	LogLevel             string
+	OTelEndpoint         string
+	OTelServiceName      string
 }
 
 // Parse builds a Config from args (nil = none) and an env lookup (e.g. os.Getenv).
@@ -35,6 +37,8 @@ func Parse(args []string, env func(string) string) Config {
 	fs.DurationVar(&c.ShutdownDrain, "shutdown-drain", 0, "after shutdown begins, keep serving (readyz=503) this long so load balancers drain before accept stops (0 disables)")
 	fs.StringVar(&c.LogFormat, "log-format", "text", "log output format: text or json")
 	fs.StringVar(&c.LogLevel, "log-level", "info", "log level: debug, info, warn, or error")
+	fs.StringVar(&c.OTelEndpoint, "otel-endpoint", "", "OTLP/HTTP collector endpoint for traces, e.g. http://collector:4318 (empty disables tracing)")
+	fs.StringVar(&c.OTelServiceName, "otel-service-name", "magisterd", "OpenTelemetry service.name resource attribute")
 	_ = fs.Parse(args)
 
 	c.BearerToken = env("MAGISTER_BEARER_TOKEN")
@@ -59,6 +63,12 @@ func Parse(args []string, env func(string) string) Config {
 	}
 	if v := env("MAGISTER_LOG_LEVEL"); v != "" && !flagSet(fs, "log-level") {
 		c.LogLevel = v
+	}
+	if c.OTelEndpoint == "" {
+		c.OTelEndpoint = env("OTEL_EXPORTER_OTLP_ENDPOINT")
+	}
+	if v := env("OTEL_SERVICE_NAME"); v != "" && !flagSet(fs, "otel-service-name") {
+		c.OTelServiceName = v
 	}
 	return c
 }

@@ -187,3 +187,28 @@ func TestRunRejectsBadLogLevel(t *testing.T) {
 		t.Errorf("run error = %q, want invalid log-level", err.Error())
 	}
 }
+
+func TestRunWithOTelEndpointStartsAndDrains(t *testing.T) {
+	dir := t.TempDir()
+	stop := make(chan struct{})
+	listening := make(chan string, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- run(
+			[]string{"-addr", "127.0.0.1:0", "-db", filepath.Join(dir, "m.db"),
+				"-otel-endpoint", "http://127.0.0.1:4318"},
+			func(string) string { return "" },
+			stop, func(addr string) { listening <- addr })
+	}()
+	select {
+	case <-listening:
+	case err := <-errCh:
+		t.Fatalf("run exited early: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("never listened")
+	}
+	close(stop)
+	if err := <-errCh; err != nil {
+		t.Errorf("run returned %v, want clean shutdown", err)
+	}
+}

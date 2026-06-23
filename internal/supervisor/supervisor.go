@@ -171,14 +171,25 @@ func (s *Supervisor) ResumeAll(ctx context.Context) error {
 			s.logger().Error("resume: skip run with invalid flow", "run", rs.ID, "err", err)
 			continue
 		}
-		s.resetIncompleteSteps(ctx, rs)
-		rs := rs
-		if err := s.engine.Provision(rs.ID, rs.Repo, rs.Base); err != nil {
+		if err := s.resumeRun(context.Background(), rs, f); err != nil {
 			s.logger().Error("resume: provision run", "run", rs.ID, "err", err)
 			continue
 		}
-		s.start(context.Background(), rs.ID, func(runCtx context.Context) error { return s.engine.Resume(runCtx, rs, f) })
 	}
+	return nil
+}
+
+// resumeRun resets the run's non-succeeded steps to pending, re-provisions its
+// scratch spec, and starts engine.Resume under the run's own id. Shared by
+// ResumeAll (startup reconciliation) and Retry (on-demand), so the two resume
+// paths cannot drift. Returns a non-nil error only when provisioning fails; the
+// caller decides whether that is fatal.
+func (s *Supervisor) resumeRun(ctx context.Context, rs core.RunState, f *flow.Flow) error {
+	s.resetIncompleteSteps(ctx, rs)
+	if err := s.engine.Provision(rs.ID, rs.Repo, rs.Base); err != nil {
+		return fmt.Errorf("provision run: %w", err)
+	}
+	s.start(ctx, rs.ID, func(runCtx context.Context) error { return s.engine.Resume(runCtx, rs, f) })
 	return nil
 }
 

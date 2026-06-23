@@ -70,6 +70,21 @@ func TestRmSubcommandDeletesScratch(t *testing.T) {
 	}
 }
 
+func TestRmSubcommandAlreadyGone(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]bool{"removed": false})
+	}))
+	defer srv.Close()
+
+	var out bytes.Buffer
+	if code := dispatch([]string{"rm", "01ABC"}, srv.URL, &out); code != 0 {
+		t.Fatalf("exit = %d, want 0; out=%s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "already gone") {
+		t.Errorf("output = %q, want it to contain 'already gone'", out.String())
+	}
+}
+
 func TestRmSubcommandRequiresRun(t *testing.T) {
 	var out bytes.Buffer
 	if code := dispatch([]string{"rm"}, "http://unused", &out); code != 2 {

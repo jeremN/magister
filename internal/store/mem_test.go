@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -165,6 +166,50 @@ func TestMemLoadIncompleteRuns(t *testing.T) {
 			t.Errorf("run %q has terminal status %s in incomplete set", r.ID, r.Status)
 		}
 	}
+}
+
+// TestMemSaveStepTransitionDoesNotAliasArtifacts proves the store owns its
+// artifacts on the WRITE side, mirroring the deep copy cloneRun makes on the
+// read side. The engine persists a step's discovered Artifacts at the
+// awaiting-gate transition and still holds that same slice; after the gate
+// passes, commitIsolated stamps Branch/Commit into it in place. If
+// SaveStepTransition aliased the caller's backing array, that stamp would race
+// a concurrent GetRun→cloneRun. Only meaningful under -race.
+func TestMemSaveStepTransitionDoesNotAliasArtifacts(t *testing.T) {
+	ctx := context.Background()
+	m := NewMem()
+	const id core.RunID = "r1"
+	if err := m.CreateRun(ctx, core.RunState{ID: id, Status: core.RunRunning}); err != nil {
+		t.Fatal(err)
+	}
+	// The engine keeps this slice after persisting it (as at engine.go's
+	// awaiting-gate transition), then mutates it in commitIsolated.
+	arts := []core.Artifact{{StepID: "a", Path: "/w/file.txt"}}
+	if err := m.SaveStepTransition(ctx,
+		core.StepState{RunID: id, StepID: "a", Status: core.StepAwaitingGate, Artifacts: arts},
+		nil); err != nil {
+		t.Fatal(err)
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { // commitIsolated stamps branch/commit in place after the gate passes
+		defer wg.Done()
+		for i := 0; i < 2000; i++ {
+			arts[0].Branch = "step/a"
+			arts[0].Commit = "deadbeef"
+		}
+	}()
+	go func() { // a concurrent status poll clones the run
+		defer wg.Done()
+		for i := 0; i < 2000; i++ {
+			if _, err := m.GetRun(ctx, id); err != nil {
+				t.Errorf("GetRun: %v", err)
+				return
+			}
+		}
+	}()
+	wg.Wait()
 }
 
 func TestMemPing(t *testing.T) {

@@ -50,6 +50,11 @@ func (m *Mem) SaveStepTransition(_ context.Context, st core.StepState, evs []eve
 	if !ok {
 		return fmt.Errorf("unknown run %q", st.RunID)
 	}
+	// Own our copy of the artifacts: the engine keeps this slice after persisting
+	// it and stamps branch/commit onto it in place (commitIsolated) once a blocking
+	// gate passes. Without this copy that in-place write would race a concurrent
+	// GetRun→cloneRun. Mirrors the read-side deep copy.
+	st.Artifacts = cloneArtifacts(st.Artifacts)
 	found := false
 	for i := range r.Steps {
 		if r.Steps[i].StepID == st.StepID {
@@ -127,10 +132,16 @@ func cloneRun(r *core.RunState) core.RunState {
 	out := *r
 	out.Steps = make([]core.StepState, len(r.Steps))
 	for i, st := range r.Steps {
-		st.Artifacts = append([]core.Artifact(nil), st.Artifacts...)
+		st.Artifacts = cloneArtifacts(st.Artifacts)
 		out.Steps[i] = st
 	}
 	return out
+}
+
+// cloneArtifacts copies an artifact slice so the store and its callers never
+// share a backing array (used on both the write and read paths).
+func cloneArtifacts(a []core.Artifact) []core.Artifact {
+	return append([]core.Artifact(nil), a...)
 }
 
 func (m *Mem) ListRuns(_ context.Context, f core.Filter) ([]core.RunSummary, error) {

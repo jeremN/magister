@@ -122,6 +122,20 @@ func (s *Server) handleCancelRun(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 }
 
+func (s *Server) handleRetry(w http.ResponseWriter, r *http.Request) {
+	id, err := s.Sup.Retry(r.Context(), core.RunID(r.PathValue("id")))
+	if err != nil {
+		var re *supervisor.RetryError
+		if errors.As(err, &re) {
+			writeError(w, re.Status, re.Msg)
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, runResponse{ID: id})
+}
+
 func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 	var req approveRequest
 	if err := decodeJSON(w, r, &req); err != nil {

@@ -26,9 +26,19 @@ Distributed tracing for the daemon, **off by default** (no `-otel-endpoint` ⇒ 
 - **The async submit→run linkage** (`supervisor.start`): the run goroutine's ctx is `context.WithCancel(context.Background())` (detached, so a run outlives its request) — which severs the trace. Fix: `start(parent, …)` re-seeds the base via `trace.ContextWithRemoteSpanContext(context.Background(), sc)` — carries the TRACE (values), NOT the request's cancellation. Both callers updated (`Submit` passes the request ctx; `ResumeAll` passes `context.Background()`). Run lifetime cannot regress. The run root span ends up a child of the (already-ended) submit span — valid, spans reference parents by ID, not liveness.
 - **Config:** `-otel-endpoint` (collector base URL, `/v1/traces` appended if absent) + `-otel-service-name`; `OTEL_EXPORTER_OTLP_ENDPOINT`/`OTEL_SERVICE_NAME` env honored when flags unset (flags win). Telemetry never fatal (Init error → warn + continue). Drain flushes the tracer AFTER `httpSrv.Shutdown` (so delivery spans created during the drain window are captured — the M2 fix).
 
-## Live trace smoke — NOT done (manual follow-up, needs a collector)
+## Live trace smoke — DONE, PASSED (2026-06-23, vs Jaeger all-in-one)
 
-Unlike fork-ship (live GitHub proof), tracing has **no zero-cost live smoke** — it needs an OTLP collector accepting OTLP-JSON on `:4318` (Jaeger/Tempo/Grafana/Honeycomb). The exporter wire-format was instead **Opus-verified by dumping the actual OTLP-JSON payload** a collector would receive (every field checked). To do the live smoke when wanted: run a Jaeger all-in-one (`docker run -p 4318:4318 -p 16686:16686 jaegertracing/all-in-one`), start the daemon with `-otel-endpoint http://127.0.0.1:4318`, submit `flows/git-native-merge.yaml`, and confirm the nested trace + matching `trace_id` in the logs in the Jaeger UI. (Documented in the `running-the-orchestrator` skill, "Distributed tracing" section, `ec18bc9`.)
+Ran against a real **Jaeger all-in-one 1.62.0** (`docker run -e COLLECTOR_OTLP_ENABLED=true -p 4318:4318 -p 16686:16686`). Daemon started `-otel-endpoint http://127.0.0.1:4318 -log-level debug -log-format json`; submitted `flows/git-native-merge.yaml` (mock, succeeded). Jaeger ingested **one connected trace (1 traceID) of 11 spans** with the exact designed nesting:
+
+```
+POST /v1/runs  {http.route=/v1/runs}
+  run <id>  {magister.run_id=<id>}
+    step build-ui   → agent mock {agent=mock, role=implementer} + gate build-ui {gate_policy=auto}
+    step build-api  → agent mock + gate build-api
+    step integrate  → join integrate {join_strategy=merge} + gate integrate
+```
+
+Proves: (1) **a real collector accepts the hand-rolled OTLP-JSON** exporter's payloads (not just the offline payload dump); (2) the full span tree nests correctly; (3) **the async submit→run linkage works through a real collector** — `run` is a child of the `POST /v1/runs` submit span despite executing after the HTTP response; (4) all attributes present; (5) **log↔trace correlation**: 13 daemon log lines carried the matching `trace_id` (`1472ddbc…`) + per-span `span_id`. SIGTERM teardown drained + flushed the tracer cleanly (no shutdown error). Container + temp files removed. Smoke recipe is in the `running-the-orchestrator` skill ("Distributed tracing" section, `ec18bc9`). **The OTel slice now has BOTH offline (Opus payload dump) and live-collector proof.**
 
 ## Process notes (durable)
 
@@ -42,6 +52,6 @@ Unlike fork-ship (live GitHub proof), tracing has **no zero-cost live smoke** �
 ## Open threads (carried)
 
 - **(blocked) `multi-host` GitLab slice** — CODE-COMPLETE but UNMERGED at `36eb9fa` (worktree `.worktrees/multi-host`), awaiting a live gitlab.com MR proof. **DO NOT merge until that passes** (user still has no gitlab.com account; handoff `…/2026-06-19-multi-host-gitlab-next-steps.md`).
-- **(optional) OTel live trace smoke** — manual, needs a local collector (see above). The wire format is already Opus-verified offline.
+- ~~**(optional) OTel live trace smoke**~~ — **DONE 2026-06-23, PASSED vs Jaeger all-in-one** (see the "Live trace smoke" section above): 11-span connected trace, async submit→run linkage proven, log↔trace correlation confirmed.
 - **(YAGNI, future) tracing extensions** — span events/links (e.g. milestone events as span events), trace sampling config, or an opt-in official-gRPC-OTLP exporter behind a build tag if a user ever needs grpc transport. None needed now.
 - The observability arc (metrics + structured logging + health + **tracing**) is now COMPLETE.

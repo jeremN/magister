@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -215,6 +216,88 @@ func TestRetryResumesCanceledRun(t *testing.T) {
 		t.Errorf("Retry returned id %q, want %q", got, id)
 	}
 	// The manual gate blocks again on resume; approve to finish.
+	waitFor(t, func() bool { return sup.Approve(id, "a", true, "") })
+	waitForStatus(t, st, id, core.RunSucceeded)
+}
+
+// TestRetryConcurrentSameRunStartsOnce fires two Retry(sameID) calls concurrently
+// and asserts exactly one succeeds while the other 409s — the up-front reservation
+// must prevent a concurrent double-start (two goroutines resuming the same scratch).
+// The resumed step's manual gate blocks, so the winning retry stays registered in
+// s.runs throughout the race, forcing the loser onto the active-check path.
+func TestRetryConcurrentSameRunStartsOnce(t *testing.T) {
+	requireGitS(t)
+	ctx := context.Background()
+	root := t.TempDir()
+	st := store.NewMem()
+	reg := NewApprovalRegistry()
+	gm := &workspace.GitManager{Root: root}
+	sup := New(testEngine(t, st, reg, gm), st, reg)
+	t.Cleanup(func() { sup.Shutdown(time.Second) })
+
+	// A single non-isolated step with a manual gate: it blocks before committing, so the
+	// run stays active with its scratch (base .git) provisioned. We cancel it → resumable,
+	// then on retry the gate blocks again — keeping the resumed run registered in s.runs
+	// throughout the race so the loser hits the active-check path. (No isolated/commit
+	// step on purpose: a committing engine goroutine would race the GetRun poll below in
+	// the Mem store, an unrelated pre-existing concern; mirrors TestRetryResumesCanceledRun.)
+	yaml := "name: f\nsteps:\n  - id: a\n    agent: mock\n    gate: { policy: manual }\n"
+
+	id, err := sup.Submit(ctx, mustFlow(t, yaml), yaml, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Wait until a is awaiting gate (For() has run → base .git exists), then cancel so
+	// Retry can find the scratch.
+	waitForStatus(t, st, id, core.RunRunning)
+	waitFor(t, func() bool {
+		rs, _ := st.GetRun(ctx, id)
+		return stepStatus(rs, "a") == core.StepAwaitingGate
+	})
+	waitFor(t, func() bool { return sup.Cancel(id) })
+	waitForStatus(t, st, id, core.RunCanceled)
+
+	// Fire two concurrent retries of the same run id.
+	type result struct {
+		id  core.RunID
+		err error
+	}
+	var wg sync.WaitGroup
+	results := make([]result, 2)
+	start := make(chan struct{})
+	for i := range results {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start // release both as simultaneously as possible
+			gotID, gotErr := sup.Retry(ctx, id)
+			results[i] = result{gotID, gotErr}
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	// Exactly one succeeds (returns the id, nil err); the other is a 409 *RetryError.
+	wins, conflicts := 0, 0
+	for _, r := range results {
+		switch {
+		case r.err == nil && r.id == id:
+			wins++
+		case r.err != nil:
+			if got := retryErrStatus(t, r.err); got != http.StatusConflict {
+				t.Errorf("loser status = %d, want 409", got)
+			}
+			conflicts++
+		default:
+			t.Errorf("unexpected result: id=%q err=%v", r.id, r.err)
+		}
+	}
+	if wins != 1 || conflicts != 1 {
+		t.Fatalf("wins=%d conflicts=%d, want exactly 1 each", wins, conflicts)
+	}
+
+	// The winner's resumed run must be live: approve a's gate to let it finish, proving
+	// a single healthy goroutine (not two racing ones) owns the run.
 	waitFor(t, func() bool { return sup.Approve(id, "a", true, "") })
 	waitForStatus(t, st, id, core.RunSucceeded)
 }

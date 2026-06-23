@@ -30,13 +30,36 @@ func retryErr(status int, format string, a ...any) *RetryError {
 // checked (step 6) so the scratch GC — which only selects terminal runs — cannot
 // reclaim it mid-retry. Errors are *RetryError with an HTTP status.
 func (s *Supervisor) Retry(ctx context.Context, runID core.RunID) (core.RunID, error) {
-	// 1. reject if the run is still active (running or unwinding).
+	// 1. reject if the run is still active, and atomically reserve the run slot in
+	//    the SAME critical section as the active-check. Without this, two concurrent
+	//    Retry(sameID) calls could both observe active=false (start only registers the
+	//    real cancel func at the very end of its long setup) and both call start —
+	//    spawning two goroutines resuming the same id against the same scratch git repo,
+	//    with the first left uncancelable. The placeholder cancel reserves the slot so a
+	//    second Retry sees the run as active and 409s; the happy path lets start overwrite
+	//    our own placeholder with the real cancel func. (Tiny window: a concurrent
+	//    Cancel(runID) during setup would hit the no-op placeholder — accepted; the run
+	//    still proceeds.) Submit needs no such guard since it mints a fresh id.
 	s.mu.Lock()
-	_, active := s.runs[runID]
-	s.mu.Unlock()
-	if active {
+	if _, active := s.runs[runID]; active {
+		s.mu.Unlock()
 		return "", retryErr(http.StatusConflict, "run %q still in progress", runID)
 	}
+	s.runs[runID] = func() {} // placeholder reservation, replaced by start on success
+	s.mu.Unlock()
+
+	// Release the reservation on every path that does NOT hand off to start. On the
+	// happy path resumeRun→start overwrites the placeholder with the real cancel func,
+	// so handedOff guards against deleting that real entry.
+	handedOff := false
+	defer func() {
+		if !handedOff {
+			s.mu.Lock()
+			delete(s.runs, runID)
+			s.mu.Unlock()
+		}
+	}()
+
 	// 2. load.
 	rs, err := s.store.GetRun(ctx, runID)
 	if err != nil {
@@ -64,7 +87,10 @@ func (s *Supervisor) Retry(ctx context.Context, runID core.RunID) (core.RunID, e
 		return "", retryErr(http.StatusInternalServerError, "stored flow no longer valid: %v", err)
 	}
 	// 5. flip out of the terminal state first so the scratch GC can't reclaim it
-	//    between the check below and the resume.
+	//    between the check below and the resume. The run is now transiently pending with
+	//    its original error cleared, so a process crash in this window leaves it
+	//    resumable-on-restart by ResumeAll even if its scratch was later found reclaimed
+	//    — an accepted at-least-once edge.
 	if err := s.store.SetRunStatus(ctx, runID, core.RunPending, ""); err != nil {
 		return "", retryErr(http.StatusInternalServerError, "reset run status: %v", err)
 	}
@@ -84,5 +110,8 @@ func (s *Supervisor) Retry(ctx context.Context, runID core.RunID) (core.RunID, e
 		}
 		return "", retryErr(http.StatusInternalServerError, "%v", err)
 	}
+	// start has replaced our placeholder with the run's real cancel func; the deferred
+	// release must not delete it.
+	handedOff = true
 	return runID, nil
 }

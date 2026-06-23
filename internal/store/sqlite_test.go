@@ -320,6 +320,38 @@ func TestSQLiteLoadIncompleteRuns(t *testing.T) {
 	}
 }
 
+func TestSQLiteMarkReclaimedExcludesFromReclaimable(t *testing.T) {
+	st := tempDB(t)
+	ctx := context.Background()
+	if err := st.CreateRun(ctx, core.RunState{ID: "done", Status: core.RunPending}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetRunStatus(ctx, "done", core.RunSucceeded, ""); err != nil {
+		t.Fatal(err)
+	}
+	future := time.Now().Add(time.Hour)
+	got, err := st.ReclaimableRuns(ctx, future)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sameRunIDSet(got, []core.RunID{"done"}) {
+		t.Fatalf("before mark = %v, want [done]", got)
+	}
+	if err := st.MarkReclaimed(ctx, "done"); err != nil {
+		t.Fatal(err)
+	}
+	got, err = st.ReclaimableRuns(ctx, future)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Errorf("after mark = %v, want none", got)
+	}
+	if err := st.MarkReclaimed(ctx, "done"); err != nil {
+		t.Errorf("second MarkReclaimed: %v", err)
+	}
+}
+
 func TestSQLitePing(t *testing.T) {
 	s := tempDB(t)
 	if err := s.Ping(context.Background()); err != nil {

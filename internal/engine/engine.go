@@ -382,7 +382,7 @@ func (e *Engine) attempt(ctx context.Context, runID core.RunID, s *flow.Step, in
 	}
 	gateCtx, gateSpan := tracer.Start(gateCtx, "gate "+s.ID,
 		trace.WithAttributes(attribute.String("magister.gate_policy", string(gatePolicyOf(s)))))
-	ok, gerr := e.Gate.Evaluate(gateCtx, runID, s, res, workDir)
+	ok, output, gerr := e.Gate.Evaluate(gateCtx, runID, s, res, workDir)
 	switch {
 	case gerr != nil:
 		gateSpan.RecordError(gerr)
@@ -400,6 +400,9 @@ func (e *Engine) attempt(ctx context.Context, runID core.RunID, s *flow.Step, in
 	case gerr != nil:
 		return res, false, gerr
 	case !ok:
+		if gatePolicyOf(s) == flow.GateAuto {
+			return res, true, &gate.VerifierFailure{Command: s.Gate.Verifier.Command, Output: output}
+		}
 		return res, true, fmt.Errorf("gate failed (policy=%q)", gatePolicyOf(s))
 	default:
 		return res, false, nil

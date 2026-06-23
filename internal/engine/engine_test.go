@@ -3,6 +3,7 @@ package engine
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	osexec "os/exec"
@@ -1230,5 +1231,31 @@ func TestMergeConflictEscalateRejectFails(t *testing.T) {
 	}
 	if err := eng.Run(context.Background(), "r1", conflictFlow(flow.FailEscalate)); err == nil {
 		t.Fatal("run should fail when the human rejects the conflict resolution")
+	}
+}
+
+func TestAttemptAutoGateFailureCarriesVerifierOutput(t *testing.T) {
+	e := &Engine{
+		Execs: map[string]core.Executor{"mock": executor.Mock{Name: "mock"}},
+		Gate:  &gate.Evaluator{Verifier: gate.CommandVerifier{}},
+		Store: store.NewMem(),
+		Bus:   event.NewBus(),
+		Clock: core.SystemClock{},
+	}
+	s := &flow.Step{ID: "a", Agent: "mock", Gate: flow.Gate{
+		Policy: flow.GateAuto, Verifier: &flow.Verifier{Command: `echo "verifier: boom"; exit 1`}}}
+	_, gateFailed, err := e.attempt(context.Background(), "r1", s, nil, 1, t.TempDir())
+	if !gateFailed {
+		t.Fatal("want gateFailed=true on a failed auto gate")
+	}
+	var vf *gate.VerifierFailure
+	if !errors.As(err, &vf) {
+		t.Fatalf("err = %v (%T), want *gate.VerifierFailure", err, err)
+	}
+	if !strings.Contains(vf.Output, "verifier: boom") {
+		t.Errorf("vf.Output = %q, want the verifier stdout", vf.Output)
+	}
+	if vf.Command != `echo "verifier: boom"; exit 1` {
+		t.Errorf("vf.Command = %q", vf.Command)
 	}
 }

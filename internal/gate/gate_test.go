@@ -2,6 +2,7 @@ package gate
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"concentus/internal/core"
@@ -11,7 +12,7 @@ import (
 func TestAutoGatePassesOnZeroExit(t *testing.T) {
 	e := &Evaluator{Approver: AutoApprover{}, Verifier: CommandVerifier{}}
 	s := &flow.Step{ID: "a", Gate: flow.Gate{Policy: flow.GateAuto, Verifier: &flow.Verifier{Command: "true"}}}
-	ok, err := e.Evaluate(context.Background(), "r1", s, core.Result{}, t.TempDir())
+	ok, _, err := e.Evaluate(context.Background(), "r1", s, core.Result{}, t.TempDir())
 	if err != nil || !ok {
 		t.Fatalf("ok=%v err=%v, want true/nil", ok, err)
 	}
@@ -20,7 +21,7 @@ func TestAutoGatePassesOnZeroExit(t *testing.T) {
 func TestAutoGateFailsOnNonZeroExit(t *testing.T) {
 	e := &Evaluator{Approver: AutoApprover{}, Verifier: CommandVerifier{}}
 	s := &flow.Step{ID: "a", Gate: flow.Gate{Policy: flow.GateAuto, Verifier: &flow.Verifier{Command: "false"}}}
-	ok, err := e.Evaluate(context.Background(), "r1", s, core.Result{}, t.TempDir())
+	ok, _, err := e.Evaluate(context.Background(), "r1", s, core.Result{}, t.TempDir())
 	if err != nil {
 		t.Fatalf("non-zero exit should be a result, not an error: %v", err)
 	}
@@ -32,7 +33,7 @@ func TestAutoGateFailsOnNonZeroExit(t *testing.T) {
 func TestManualGateUsesApprover(t *testing.T) {
 	e := &Evaluator{Approver: fixedApprover(false), Verifier: CommandVerifier{}}
 	s := &flow.Step{ID: "a", Gate: flow.Gate{Policy: flow.GateManual}}
-	ok, _ := e.Evaluate(context.Background(), "r1", s, core.Result{}, t.TempDir())
+	ok, _, _ := e.Evaluate(context.Background(), "r1", s, core.Result{}, t.TempDir())
 	if ok {
 		t.Fatal("approver returned false; gate should fail")
 	}
@@ -78,7 +79,7 @@ func condStep(t *testing.T, expr string) *flow.Step {
 func TestConditionalGateTruePassesWithoutApprover(t *testing.T) {
 	e := &Evaluator{Approver: failIfCalledApprover{t}, Verifier: CommandVerifier{}}
 	s := condStep(t, "result.cost_usd < 1.0")
-	ok, err := e.Evaluate(context.Background(), "r1", s, core.Result{CostUSD: 0.5}, t.TempDir())
+	ok, _, err := e.Evaluate(context.Background(), "r1", s, core.Result{CostUSD: 0.5}, t.TempDir())
 	if err != nil || !ok {
 		t.Fatalf("ok=%v err=%v, want true/nil", ok, err)
 	}
@@ -87,7 +88,7 @@ func TestConditionalGateTruePassesWithoutApprover(t *testing.T) {
 func TestConditionalGateFalseFails(t *testing.T) {
 	e := &Evaluator{Approver: failIfCalledApprover{t}, Verifier: CommandVerifier{}}
 	s := condStep(t, "result.cost_usd < 1.0")
-	ok, err := e.Evaluate(context.Background(), "r1", s, core.Result{CostUSD: 2.0}, t.TempDir())
+	ok, _, err := e.Evaluate(context.Background(), "r1", s, core.Result{CostUSD: 2.0}, t.TempDir())
 	if err != nil {
 		t.Fatalf("a false condition should be a result, not an error: %v", err)
 	}
@@ -106,11 +107,24 @@ func TestConditionalGateMapsResultFields(t *testing.T) {
 		StepID:    "a",
 		Artifacts: []core.Artifact{{Path: "x"}, {Path: "y"}},
 	}
-	ok, err := e.Evaluate(context.Background(), "r1", s, res, t.TempDir())
+	ok, _, err := e.Evaluate(context.Background(), "r1", s, res, t.TempDir())
 	if err != nil {
 		t.Fatalf("artifacts/step_id field mapping: unexpected error: %v", err)
 	}
 	if !ok {
 		t.Fatal("artifacts/step_id field mapping: gate returned false; check artifactPaths maps .Path and StepID is forwarded")
+	}
+}
+
+func TestAutoGateReturnsVerifierOutput(t *testing.T) {
+	e := &Evaluator{Approver: AutoApprover{}, Verifier: CommandVerifier{}}
+	s := &flow.Step{ID: "a", Gate: flow.Gate{
+		Policy: flow.GateAuto, Verifier: &flow.Verifier{Command: `echo nope; exit 1`}}}
+	ok, out, err := e.Evaluate(context.Background(), "r1", s, core.Result{}, t.TempDir())
+	if err != nil || ok {
+		t.Fatalf("Evaluate = (%v, %v), want (false, nil)", ok, err)
+	}
+	if !strings.Contains(out, "nope") {
+		t.Errorf("output = %q, want the verifier stdout", out)
 	}
 }

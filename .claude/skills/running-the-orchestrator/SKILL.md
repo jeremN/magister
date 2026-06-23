@@ -140,6 +140,22 @@ reported as `exists`, not an error):
   + `cm pr --head-repo <fork>` (in fork mode `--remote` overrides only the PR base,
   which defaults to the source origin/upstream). `POST /v1/runs/{id}/ship`.
 
+### Retry / resume a failed run (`cm retry`)
+
+A `failed` or `canceled` run can be resumed **in place** — same run id, reusing
+its preserved scratch — so already-succeeded steps are not re-run:
+
+```
+cm retry <run> [--watch]
+```
+
+`cm retry` re-runs the run from its failed step onward (succeeded steps are
+seeded from their persisted artifacts and skipped) via `POST /v1/runs/{id}/retry`.
+It rejects a `succeeded` run (`409`, nothing to retry), an in-progress run (`409`),
+an unknown run (`404`), and a run whose scratch was already reclaimed by the GC
+janitor (`409` — resubmit the flow). `--watch` streams the resumed run's events
+until `run.done`, like `cm run --watch`.
+
 ## Gotchas (each cost real time to learn)
 
 - **`flows/feature-flow.yaml` does NOT run standalone.** It references the unregistered `gemini` agent, `manual` gates (would block on `cm approve`), and pricey `opus`. (Its `integrate` step is now a valid git-native `merge`+`escalate` join — isolated, with a `join.agent` — but the surrounding agents still make it a poor quick smoke.) Use `flows/git-native-merge.yaml` for a mock merge smoke, or write a minimal flow as above.
@@ -150,4 +166,4 @@ reported as `exists`, not an error):
 
 ## cm command surface
 
-`cm run <flow.yaml> [--repo <abs-path>] [--base <ref>] [--watch]` · `cm ls` · `cm get <run>` · `cm watch <run>` · `cm approve|reject <run> <step> [reason]` · `cm cancel <run>` · `cm push <run> [--remote <url-or-name>] [--as <branch>] [--step <id>] [--force]` · `cm pr <run> [--remote <url-or-name>] [--head-repo <url-or-name>] [--as <branch>] [--step <id>] [--base <branch>] [--title <t>] [--body <b>] [--draft]` · `cm ship <run> [--remote <url-or-name>] [--head-repo <url-or-name>] [--as <branch>] [--step <id>] [--base <branch>] [--title <t>] [--body <b>] [--draft] [--force]`. All target `$MAGISTER_ADDR`. `--repo`/`--base` run the flow against a real git repo; `cm push` delivers its result branch to a remote; `cm pr` opens a GitHub PR on that branch; `cm ship` does both in one idempotent step; `--head-repo <fork>` on `cm pr`/`cm ship` opens a cross-fork PR from your fork into upstream (see *External repo* above).
+`cm run <flow.yaml> [--repo <abs-path>] [--base <ref>] [--watch]` · `cm ls` · `cm get <run>` · `cm watch <run>` · `cm approve|reject <run> <step> [reason]` · `cm cancel <run>` · `cm retry <run> [--watch]` · `cm push <run> [--remote <url-or-name>] [--as <branch>] [--step <id>] [--force]` · `cm pr <run> [--remote <url-or-name>] [--as <branch>] [--step <id>] [--base <branch>] [--title <t>] [--body <b>] [--draft] [--head-repo <url-or-name>]`. All target `$MAGISTER_ADDR`.

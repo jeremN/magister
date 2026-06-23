@@ -30,7 +30,7 @@ func main() {
 
 func dispatch(args []string, base string, out io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(out, "usage: cm <run|ls|get|watch|approve|reject|cancel|push|pr|ship|loglevel> ...")
+		fmt.Fprintln(out, "usage: cm <run|ls|get|watch|approve|reject|cancel|retry|push|pr|ship|loglevel> ...")
 		return 2
 	}
 	c := &client{base: base, http: &http.Client{Timeout: 0}}
@@ -61,6 +61,8 @@ func dispatch(args []string, base string, out io.Writer) int {
 			return 2
 		}
 		return c.delete("/v1/runs/"+args[1], out)
+	case "retry":
+		return c.retry(args[1:], out)
 	case "push":
 		return c.push(args[1:], out)
 	case "pr":
@@ -225,6 +227,41 @@ func (c *client) delete(path string, out io.Writer) int {
 		return printErr(resp, out)
 	}
 	fmt.Fprintln(out, "canceled")
+	return 0
+}
+
+func (c *client) retry(args []string, out io.Writer) int {
+	watch := false
+	var run string
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--watch":
+			watch = true
+		default:
+			run = args[i]
+		}
+	}
+	if run == "" {
+		fmt.Fprintln(out, "usage: cm retry <run> [--watch]")
+		return 2
+	}
+	resp, err := c.http.Post(c.base+"/v1/runs/"+run+"/retry", "application/json", nil)
+	if err != nil {
+		fmt.Fprintln(out, "retry:", err)
+		return 1
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		return printErr(resp, out)
+	}
+	var rr struct {
+		ID string `json:"id"`
+	}
+	json.NewDecoder(resp.Body).Decode(&rr)
+	fmt.Fprintln(out, "resuming", rr.ID)
+	if watch {
+		return c.watch(rr.ID, out)
+	}
 	return 0
 }
 

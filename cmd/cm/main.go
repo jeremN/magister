@@ -30,7 +30,7 @@ func main() {
 
 func dispatch(args []string, base string, out io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(out, "usage: cm <run|ls|get|watch|approve|reject|cancel|retry|push|pr|ship|loglevel> ...")
+		fmt.Fprintln(out, "usage: cm <run|ls|get|watch|approve|reject|cancel|retry|push|pr|ship|gc|rm|loglevel> ...")
 		return 2
 	}
 	c := &client{base: base, http: &http.Client{Timeout: 0}}
@@ -63,6 +63,14 @@ func dispatch(args []string, base string, out io.Writer) int {
 		return c.delete("/v1/runs/"+args[1], out)
 	case "retry":
 		return c.retry(args[1:], out)
+	case "gc":
+		return c.gc(args[1:], out)
+	case "rm":
+		if len(args) < 2 {
+			fmt.Fprintln(out, "usage: cm rm <run>")
+			return 2
+		}
+		return c.rm(args[1], out)
 	case "push":
 		return c.push(args[1:], out)
 	case "pr":
@@ -261,6 +269,68 @@ func (c *client) retry(args []string, out io.Writer) int {
 	fmt.Fprintln(out, "resuming", rr.ID)
 	if watch {
 		return c.watch(rr.ID, out)
+	}
+	return 0
+}
+
+func (c *client) gc(args []string, out io.Writer) int {
+	path := "/v1/gc"
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--older-than":
+			if i+1 >= len(args) {
+				fmt.Fprintln(out, "usage: --older-than requires a value")
+				return 2
+			}
+			i++
+			path = "/v1/gc?older_than=" + url.QueryEscape(args[i])
+		default:
+			fmt.Fprintln(out, "usage: cm gc [--older-than <dur>]")
+			return 2
+		}
+	}
+	resp, err := c.http.Post(c.base+path, "application/json", nil)
+	if err != nil {
+		fmt.Fprintln(out, "gc:", err)
+		return 1
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return printErr(resp, out)
+	}
+	var body struct {
+		Reclaimed int `json:"reclaimed"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		fmt.Fprintln(out, "gc: decode:", err)
+		return 1
+	}
+	fmt.Fprintf(out, "reclaimed %d\n", body.Reclaimed)
+	return 0
+}
+
+func (c *client) rm(run string, out io.Writer) int {
+	req, _ := http.NewRequest(http.MethodDelete, c.base+"/v1/runs/"+run+"/scratch", nil)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		fmt.Fprintln(out, "rm:", err)
+		return 1
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return printErr(resp, out)
+	}
+	var body struct {
+		Removed bool `json:"removed"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		fmt.Fprintln(out, "rm: decode:", err)
+		return 1
+	}
+	if body.Removed {
+		fmt.Fprintln(out, "removed")
+	} else {
+		fmt.Fprintln(out, "already gone")
 	}
 	return 0
 }

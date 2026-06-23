@@ -205,13 +205,14 @@ deterministic.
   empty `Feedback` leaves the prompt byte-identical.
 - **engine** (engine_test.go — the heart): a scripted executor that writes
   verifier-**failing** output when `t.Feedback == ""` and verifier-**passing**
-  output once `t.Feedback != ""`, recording the feedback it received. Using the
-  same workspace setup the existing engine retry tests use (a real-git workspace
-  so the success path's `commitIsolated` works — `requireGit`, sandbox-disabled
-  to match), a shell verifier (`CommandVerifier` runs `sh -c`), and
-  `retry.max = 2`, assert: attempt 1 fails → the executor's recorded `Feedback`
-  on attempt 2 equals the captured verifier output → the run succeeds. Plus: an
-  agent **execution** error threads no feedback (next attempt `Feedback == ""`).
+  output once `t.Feedback != ""`, recording the feedback it received. Uses a
+  plain `workspace.Manager{Root: t.TempDir()}` with a **non-isolated** step (like
+  `TestEngineRetryThenSucceed`) — `commitIsolated` no-ops for non-isolated steps,
+  so **no git is required** — an auto-gate shell verifier (`CommandVerifier` runs
+  `sh -c`) that prints to stdout on failure, and `retry.max = 2`. Assert: attempt
+  1 fails → the executor's recorded `Feedback` on attempt 2 equals the captured
+  verifier output → the run succeeds. Plus: an agent **execution** error threads
+  no feedback (next attempt `Feedback == ""`).
 - Full `go test -race ./...` green; `gofmt -l` clean.
 
 ## Out of scope (deferred)

@@ -80,7 +80,9 @@ func (s *Supervisor) SweepScratch(ctx context.Context, olderThan time.Time) (int
 // mid-resume. That window is the same at-least-once edge the background janitor
 // already carries (it selects a terminal run that is then retried); the reverse
 // order is caught by Retry's own scratch pre-flight. Accepted and recoverable
-// (resubmit).
+// (resubmit). A run reclaimed in that window stays marked reclaimed even if a
+// later Retry re-provisions a fresh scratch, so it drops out of the background
+// TTL sweep; cm rm still reclaims it explicitly.
 func (s *Supervisor) ReclaimRun(ctx context.Context, runID core.RunID) (bool, error) {
 	s.mu.Lock()
 	_, active := s.runs[runID]

@@ -212,6 +212,39 @@ func TestMemSaveStepTransitionDoesNotAliasArtifacts(t *testing.T) {
 	wg.Wait()
 }
 
+func TestMemMarkReclaimedExcludesFromReclaimable(t *testing.T) {
+	st := NewMem()
+	ctx := context.Background()
+	if err := st.CreateRun(ctx, core.RunState{ID: "done", Status: core.RunPending}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetRunStatus(ctx, "done", core.RunSucceeded, ""); err != nil {
+		t.Fatal(err)
+	}
+	future := time.Now().Add(time.Hour)
+	got, err := st.ReclaimableRuns(ctx, future)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sameRunIDSet(got, []core.RunID{"done"}) {
+		t.Fatalf("before mark = %v, want [done]", got)
+	}
+	if err := st.MarkReclaimed(ctx, "done"); err != nil {
+		t.Fatal(err)
+	}
+	got, err = st.ReclaimableRuns(ctx, future)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Errorf("after mark = %v, want none", got)
+	}
+	// Idempotent: a second mark is a no-op, not an error.
+	if err := st.MarkReclaimed(ctx, "done"); err != nil {
+		t.Errorf("second MarkReclaimed: %v", err)
+	}
+}
+
 func TestMemPing(t *testing.T) {
 	if err := NewMem().Ping(context.Background()); err != nil {
 		t.Fatalf("Mem.Ping = %v, want nil", err)

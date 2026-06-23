@@ -49,4 +49,7 @@ ON CONFLICT (run_id, step_id, path) DO NOTHING;
 SELECT run_id, step_id, path, branch, commit_sha FROM artifacts WHERE run_id = ? ORDER BY step_id, path;
 
 -- name: ReclaimableRuns :many
-SELECT id FROM runs WHERE status IN ('succeeded', 'failed', 'canceled') AND updated_at < ? ORDER BY updated_at;
+SELECT id FROM runs WHERE status IN ('succeeded', 'failed', 'canceled') AND reclaimed_at IS NULL AND updated_at < ? ORDER BY updated_at;
+
+-- name: MarkReclaimed :exec
+UPDATE runs SET reclaimed_at = datetime('now') WHERE id = ?;

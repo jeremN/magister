@@ -156,6 +156,11 @@ an unknown run (`404`), and a run whose scratch was already reclaimed by the GC
 janitor (`409` — resubmit the flow). `--watch` streams the resumed run's events
 until `run.done`, like `cm run --watch`.
 
+### Reclaim scratch (`cm gc` / `cm rm`)
+
+- `cm gc [--older-than <dur>]` — reclaim scratch workspaces for all terminal runs now (omit `--older-than` to reclaim everything terminal; pass e.g. `--older-than 24h` to keep recent runs). Frees disk without waiting for the background janitor.
+- `cm rm <run>` — reclaim ONE run's scratch workspace immediately. Removes only the on-disk clone; the run record, its events, and artifacts are kept. 404 if unknown, 409 if the run is still in progress.
+
 ## Gotchas (each cost real time to learn)
 
 - **`flows/feature-flow.yaml` does NOT run standalone.** It references the unregistered `gemini` agent, `manual` gates (would block on `cm approve`), and pricey `opus`. (Its `integrate` step is now a valid git-native `merge`+`escalate` join — isolated, with a `join.agent` — but the surrounding agents still make it a poor quick smoke.) Use `flows/git-native-merge.yaml` for a mock merge smoke, or write a minimal flow as above.

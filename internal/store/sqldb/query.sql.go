@@ -372,7 +372,7 @@ func (q *Queries) SetRunStatus(ctx context.Context, arg SetRunStatusParams) erro
 }
 
 const reclaimableRuns = `-- name: ReclaimableRuns :many
-SELECT id FROM runs WHERE status IN ('succeeded', 'failed', 'canceled') AND updated_at < ? ORDER BY updated_at
+SELECT id FROM runs WHERE status IN ('succeeded', 'failed', 'canceled') AND reclaimed_at IS NULL AND updated_at < ? ORDER BY updated_at
 `
 
 func (q *Queries) ReclaimableRuns(ctx context.Context, updatedAt string) ([]string, error) {
@@ -396,6 +396,15 @@ func (q *Queries) ReclaimableRuns(ctx context.Context, updatedAt string) ([]stri
 		return nil, err
 	}
 	return items, nil
+}
+
+const markReclaimed = `-- name: MarkReclaimed :exec
+UPDATE runs SET reclaimed_at = datetime('now') WHERE id = ?
+`
+
+func (q *Queries) MarkReclaimed(ctx context.Context, id string) error {
+	_, err := q.db.ExecContext(ctx, markReclaimed, id)
+	return err
 }
 
 const upsertStep = `-- name: UpsertStep :exec

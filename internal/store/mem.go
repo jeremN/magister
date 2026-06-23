@@ -20,6 +20,7 @@ type Mem struct {
 	runs      map[core.RunID]*core.RunState
 	events    map[core.RunID][]event.Event
 	updatedAt map[core.RunID]time.Time
+	reclaimed map[core.RunID]bool
 	seq       int64
 }
 
@@ -28,6 +29,7 @@ func NewMem() *Mem {
 		runs:      make(map[core.RunID]*core.RunState),
 		events:    make(map[core.RunID][]event.Event),
 		updatedAt: make(map[core.RunID]time.Time),
+		reclaimed: make(map[core.RunID]bool),
 	}
 }
 
@@ -173,12 +175,22 @@ func isTerminal(s core.RunStatus) bool {
 	return s == core.RunSucceeded || s == core.RunFailed || s == core.RunCanceled
 }
 
+func (m *Mem) MarkReclaimed(_ context.Context, id core.RunID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.runs[id]; !ok {
+		return fmt.Errorf("unknown run %q", id)
+	}
+	m.reclaimed[id] = true
+	return nil
+}
+
 func (m *Mem) ReclaimableRuns(_ context.Context, before time.Time) ([]core.RunID, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var out []core.RunID
 	for id, r := range m.runs {
-		if !isTerminal(r.Status) {
+		if !isTerminal(r.Status) || m.reclaimed[id] {
 			continue
 		}
 		if u, ok := m.updatedAt[id]; ok && u.Before(before) {

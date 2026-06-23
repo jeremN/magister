@@ -66,6 +66,16 @@ type prResponse struct {
 	Draft bool   `json:"draft,omitempty"`
 }
 
+// gcResponse is returned from POST /v1/gc.
+type gcResponse struct {
+	Reclaimed int `json:"reclaimed"`
+}
+
+// reclaimResponse is returned from DELETE /v1/runs/{id}/scratch.
+type reclaimResponse struct {
+	Removed bool `json:"removed"`
+}
+
 // pushResponse is returned from POST /v1/runs/{id}/push.
 type pushResponse struct {
 	Remote       string `json:"remote"`

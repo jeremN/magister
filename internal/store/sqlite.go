@@ -292,6 +292,10 @@ func (s *SQLite) ReclaimableRuns(ctx context.Context, before time.Time) ([]core.
 	return out, nil
 }
 
+func (s *SQLite) MarkReclaimed(ctx context.Context, id core.RunID) error {
+	return s.qw.MarkReclaimed(ctx, string(id))
+}
+
 func (s *SQLite) EventsSince(ctx context.Context, id core.RunID, seq int64) ([]event.Event, error) {
 	rows, err := s.qr.EventsSince(ctx, sqldb.EventsSinceParams{RunID: string(id), Seq: seq})
 	if err != nil {

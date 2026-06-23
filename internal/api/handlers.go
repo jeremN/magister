@@ -136,6 +136,38 @@ func (s *Server) handleRetry(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, runResponse{ID: id})
 }
 
+func (s *Server) handleGC(w http.ResponseWriter, r *http.Request) {
+	cutoff := time.Now()
+	if v := r.URL.Query().Get("older_than"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid older_than: "+err.Error())
+			return
+		}
+		cutoff = cutoff.Add(-d)
+	}
+	n, err := s.Sup.SweepScratch(r.Context(), cutoff)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, gcResponse{Reclaimed: n})
+}
+
+func (s *Server) handleReclaimScratch(w http.ResponseWriter, r *http.Request) {
+	removed, err := s.Sup.ReclaimRun(r.Context(), core.RunID(r.PathValue("id")))
+	if err != nil {
+		var re *supervisor.ReclaimError
+		if errors.As(err, &re) {
+			writeError(w, re.Status, re.Msg)
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, reclaimResponse{Removed: removed})
+}
+
 func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 	var req approveRequest
 	if err := decodeJSON(w, r, &req); err != nil {

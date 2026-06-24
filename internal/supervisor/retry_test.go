@@ -205,7 +205,7 @@ func TestRetryResumesCanceledRun(t *testing.T) {
 		rs, _ := st.GetRun(ctx, id)
 		return stepStatus(rs, "a") == core.StepAwaitingGate
 	})
-	waitFor(t, func() bool { return sup.Cancel(id) })
+	waitFor(t, func() bool { return sup.Cancel(ctx, id) == nil })
 	waitForStatus(t, st, id, core.RunCanceled)
 
 	got, err := sup.Retry(ctx, id)
@@ -254,7 +254,7 @@ func TestRetryConcurrentSameRunStartsOnce(t *testing.T) {
 		rs, _ := st.GetRun(ctx, id)
 		return stepStatus(rs, "a") == core.StepAwaitingGate
 	})
-	waitFor(t, func() bool { return sup.Cancel(id) })
+	waitFor(t, func() bool { return sup.Cancel(ctx, id) == nil })
 	waitForStatus(t, st, id, core.RunCanceled)
 
 	// Fire two concurrent retries of the same run id.

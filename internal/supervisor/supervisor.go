@@ -113,7 +113,8 @@ type CancelError struct {
 func (e *CancelError) Error() string { return e.Msg }
 
 // Cancel cancels an active run. Returns nil on success, *CancelError(404) for an
-// unknown run, and *CancelError(409) for a known-but-terminal (non-active) run.
+// unknown run, *CancelError(409) for a known-but-terminal (non-active) run, and a
+// plain (non-*CancelError) error on a store-load failure → the handler maps it to 500.
 func (s *Supervisor) Cancel(ctx context.Context, id core.RunID) error {
 	s.mu.Lock()
 	cancel, ok := s.runs[id]
@@ -127,9 +128,9 @@ func (s *Supervisor) Cancel(ctx context.Context, id core.RunID) error {
 		if errors.Is(err, core.ErrRunNotFound) {
 			return &CancelError{Status: http.StatusNotFound, Msg: "unknown run"}
 		}
-		// store error → treat as not-found (safe; caller gets 404 vs 5xx ambiguity
-		// is less important than not leaking store internals).
-		return &CancelError{Status: http.StatusNotFound, Msg: "unknown run"}
+		// A transient store failure is NOT a missing run: surface it as a plain error
+		// so the handler's non-*CancelError fallback writes 500 (mirrors Retry/ReclaimRun).
+		return fmt.Errorf("load run %q: %w", id, err)
 	}
 	return &CancelError{Status: http.StatusConflict, Msg: "run not active"}
 }

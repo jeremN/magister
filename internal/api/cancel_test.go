@@ -3,13 +3,46 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"concentus/internal/core"
 )
+
+// errReadCloser returns a custom error partway through a read (NOT a
+// MaxBytesError), simulating a torn connection / client disconnect.
+type errReadCloser struct{ err error }
+
+func (e errReadCloser) Read([]byte) (int, error) { return 0, e.err }
+func (e errReadCloser) Close() error             { return nil }
+
+// TestDecodeJSONNonMaxBytesErrorIsNot413 verifies that a genuine read error
+// (not body-too-large) is surfaced raw by decodeJSON, so the caller's generic
+// 400 path handles it — it must NOT be reclassified as errBodyTooLarge (413).
+func TestDecodeJSONNonMaxBytesErrorIsNot413(t *testing.T) {
+	boom := errors.New("connection reset by peer")
+	r := httptest.NewRequest(http.MethodPost, "/v1/runs/r1/pr", errReadCloser{err: boom})
+	w := httptest.NewRecorder()
+
+	var dst struct{}
+	err := decodeJSON(w, r, &dst)
+	if err == nil {
+		t.Fatal("expected a read error from decodeJSON")
+	}
+	if errors.Is(err, errBodyTooLarge) {
+		t.Fatalf("non-MaxBytes read error must NOT map to errBodyTooLarge (413), got %v", err)
+	}
+	if !errors.Is(err, boom) {
+		t.Errorf("decodeJSON dropped the raw read error: got %v, want it to wrap %v", err, boom)
+	}
+}
+
+var _ io.ReadCloser = errReadCloser{}
 
 // TestCancelUnknownRun404 verifies that canceling a run that was never created
 // returns 404 (not 409 or any other status).

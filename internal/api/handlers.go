@@ -325,7 +325,9 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) error {
 		if errors.As(err, &mbErr) {
 			return errBodyTooLarge
 		}
-		return errBodyTooLarge // any other read error also maps to too-large
+		// Any other read error (torn connection, client disconnect) is NOT
+		// body-too-large; surface it raw so the caller's generic 400 path handles it.
+		return err
 	}
 	if len(body) == 0 {
 		return nil

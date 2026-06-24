@@ -21,7 +21,10 @@ type Verifier interface {
 // package is ever extended to accept untrusted input, sanitize or re-evaluate.
 type CommandVerifier struct{}
 
-const maxFeedbackBytes = 8 << 10 // 8 KiB cap on verifier output fed back to the agent
+// maxFeedbackBytes caps the verifier output captured for agent feedback. It
+// bounds the TAIL kept; tailBytes prepends a ~15-byte truncation marker when it
+// clips, so the returned string can be up to maxFeedbackBytes + len(marker).
+const maxFeedbackBytes = 8 << 10
 
 func (CommandVerifier) Verify(ctx context.Context, command, workDir string) (bool, string, error) {
 	if command == "" {

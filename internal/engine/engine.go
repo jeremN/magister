@@ -412,6 +412,7 @@ func (e *Engine) attempt(ctx context.Context, runID core.RunID, s *flow.Step, in
 		return res, false, gerr
 	case !ok:
 		if gatePolicyOf(s) == flow.GateAuto {
+			// s.Gate.Verifier is non-nil here: flow.validateGate requires every auto gate to set a non-empty Command.
 			return res, true, &gate.VerifierFailure{Command: s.Gate.Verifier.Command, Output: output}
 		}
 		return res, true, fmt.Errorf("gate failed (policy=%q)", gatePolicyOf(s))

@@ -63,7 +63,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	repo := q.Get("repo")
 	base := ""
 	if repo != "" {
-		sha, err := workspace.ResolveBase(repo, q.Get("base"))
+		sha, err := workspace.ResolveBase(r.Context(), repo, q.Get("base"))
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "repo: "+err.Error())
 			return

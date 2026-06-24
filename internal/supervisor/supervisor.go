@@ -278,7 +278,7 @@ func (s *Supervisor) Push(ctx context.Context, runID core.RunID, opts PushOpts) 
 	if branch == "" {
 		return PushResult{}, pushErr(http.StatusBadRequest, "step %q has no branch (not an isolated/committed step)", step.ID)
 	}
-	remoteURL, err := workspace.ResolveRemote(rs.Repo, opts.Remote)
+	remoteURL, err := workspace.ResolveRemote(ctx, rs.Repo, opts.Remote)
 	if err != nil {
 		return PushResult{}, pushErr(http.StatusBadRequest, "remote: %v", err)
 	}

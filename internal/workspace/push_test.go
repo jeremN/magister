@@ -14,7 +14,7 @@ func TestResolveRemoteOriginDefault(t *testing.T) {
 	gitOut(t, bare, "init", "--bare")
 	gitOut(t, src, "remote", "add", "origin", bare)
 
-	got, err := ResolveRemote(src, "")
+	got, err := ResolveRemote(context.Background(), src, "")
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -30,7 +30,7 @@ func TestResolveRemoteByName(t *testing.T) {
 	gitOut(t, bare, "init", "--bare")
 	gitOut(t, src, "remote", "add", "upstream", bare)
 
-	got, err := ResolveRemote(src, "upstream")
+	got, err := ResolveRemote(context.Background(), src, "upstream")
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -42,7 +42,7 @@ func TestResolveRemoteByName(t *testing.T) {
 func TestResolveRemoteURLPassthrough(t *testing.T) {
 	// A URL short-circuits before any git call, so no fixture/git is needed.
 	for _, url := range []string{"https://example.com/me/x.git", "git@github.com:me/x.git"} {
-		got, err := ResolveRemote("/abs/src", url)
+		got, err := ResolveRemote(context.Background(), "/abs/src", url)
 		if err != nil {
 			t.Fatalf("resolve %q: %v", url, err)
 		}
@@ -55,7 +55,7 @@ func TestResolveRemoteURLPassthrough(t *testing.T) {
 func TestResolveRemoteMissing(t *testing.T) {
 	requireGit(t)
 	src, _ := setupSourceRepo(t) // no remotes configured
-	if _, err := ResolveRemote(src, ""); err == nil {
+	if _, err := ResolveRemote(context.Background(), src, ""); err == nil {
 		t.Error("expected error when origin is absent")
 	}
 }
@@ -63,14 +63,14 @@ func TestResolveRemoteMissing(t *testing.T) {
 func TestResolveRemoteRejectsBadName(t *testing.T) {
 	requireGit(t)
 	src, _ := setupSourceRepo(t)
-	if _, err := ResolveRemote(src, "--upload-pack=x"); err == nil {
+	if _, err := ResolveRemote(context.Background(), src, "--upload-pack=x"); err == nil {
 		t.Error("expected error for a flag-like remote name")
 	}
 }
 
 func TestResolveRemoteRejectsRelativeSource(t *testing.T) {
 	requireGit(t)
-	if _, err := ResolveRemote("relative/path", ""); err == nil {
+	if _, err := ResolveRemote(context.Background(), "relative/path", ""); err == nil {
 		t.Error("expected error for a relative source path")
 	}
 }

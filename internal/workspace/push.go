@@ -13,8 +13,9 @@ import (
 //   - remote is a URL     → returned as-is (git validates/authenticates it)
 //   - remote is a name    → the source's URL for that remote
 //
-// The source repo's refs/working tree are never written.
-func ResolveRemote(sourceRepo, remote string) (string, error) {
+// The source repo's refs/working tree are never written. ctx cancels the
+// underlying git subprocess.
+func ResolveRemote(ctx context.Context, sourceRepo, remote string) (string, error) {
 	if sourceRepo == "" {
 		return "", fmt.Errorf("empty source repo path")
 	}
@@ -31,7 +32,7 @@ func ResolveRemote(sourceRepo, remote string) (string, error) {
 	if !safeRemoteName(name) {
 		return "", fmt.Errorf("invalid remote name %q", name)
 	}
-	out, err := gitRead(sourceRepo, "remote", "get-url", name)
+	out, err := gitRead(ctx, sourceRepo, "remote", "get-url", name)
 	if err != nil {
 		return "", fmt.Errorf("no remote %q in %q", name, sourceRepo)
 	}

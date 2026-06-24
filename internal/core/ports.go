@@ -28,6 +28,11 @@ type Task struct {
 	Prompt  string
 	Inputs  []Artifact
 	WorkDir string
+	// Feedback is non-empty on a retry after an auto-gate verifier failed: the
+	// previous attempt's captured verifier output (tail-capped). Executors
+	// incorporate it into the model prompt so the agent can fix the specific
+	// failure; empty on the first attempt. Mock ignores it.
+	Feedback string
 	// Emit publishes a mid-step milestone event (e.g. agent.tool). The engine binds
 	// it to persist-then-publish; nil for callers that don't stream (e.g. Mock, or a
 	// non-engine test) — executors must nil-check or use a no-op wrapper.

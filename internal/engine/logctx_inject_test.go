@@ -29,7 +29,7 @@ func TestRunAgentInjectsScopedLogger(t *testing.T) {
 		Log:   slog.New(slog.NewTextHandler(&buf, nil)),
 		Clock: core.SystemClock{},
 	}
-	if _, err := e.runAgent(context.Background(), "run-1", "step-a", "impl", "mock", "prompt", t.TempDir(), 1, nil); err != nil {
+	if _, err := e.runAgent(context.Background(), "run-1", "step-a", "impl", "mock", "prompt", t.TempDir(), 1, nil, ""); err != nil {
 		t.Fatalf("runAgent: %v", err)
 	}
 	out := buf.String()

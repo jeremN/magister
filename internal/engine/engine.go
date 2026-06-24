@@ -298,6 +298,7 @@ func (e *Engine) runStep(ctx context.Context, runID core.RunID, s *flow.Step, in
 	}
 
 	var lastErr error
+	var lastFeedback string
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		if attempt > 1 {
 			e.transition(ctx, runID, stepState(runID, s.ID, core.StepRetrying, attempt, workDir, core.Result{}, lastErr),
@@ -308,10 +309,15 @@ func (e *Engine) runStep(ctx context.Context, runID core.RunID, s *flow.Step, in
 			}
 		}
 
+		if attempt > 1 && lastFeedback != "" {
+			e.logger().DebugContext(ctx, "retrying with verifier feedback",
+				"run", string(runID), "step", s.ID, "attempt", attempt, "feedback_bytes", len(lastFeedback))
+		}
+
 		e.transition(ctx, runID, stepState(runID, s.ID, core.StepRunning, attempt, workDir, core.Result{}, nil),
 			event.Event{StepID: s.ID, Kind: event.StepStarted, Attempt: attempt})
 
-		res, gateFailed, execErr := e.attempt(ctx, runID, s, inputs, attempt, workDir)
+		res, gateFailed, execErr := e.attempt(ctx, runID, s, inputs, attempt, workDir, lastFeedback)
 		if execErr == nil {
 			if cerr := e.commitIsolated(runID, s, workDir, &res); cerr != nil {
 				execErr = cerr // a failed commit is a step failure → normal disposition
@@ -322,6 +328,11 @@ func (e *Engine) runStep(ctx context.Context, runID core.RunID, s *flow.Step, in
 			}
 		}
 		lastErr = execErr
+		lastFeedback = ""
+		var vf *gate.VerifierFailure
+		if errors.As(lastErr, &vf) {
+			lastFeedback = vf.Output
+		}
 
 		// A join step's failure disposition is governed by on_conflict (only `retry`
 		// re-runs via the generic budget); a normal/gate failure retries on s.Retry.
@@ -362,11 +373,11 @@ func withTimeout(ctx context.Context, d flow.Duration) (context.Context, context
 // conditional gate's inline expr evaluation run on the un-timed parent ctx.
 // gateFailed distinguishes a gate verdict from an executor/infra error so runStep
 // can decide escalation.
-func (e *Engine) attempt(ctx context.Context, runID core.RunID, s *flow.Step, inputs []core.Artifact, attemptNum int, workDir string) (res core.Result, gateFailed bool, err error) {
+func (e *Engine) attempt(ctx context.Context, runID core.RunID, s *flow.Step, inputs []core.Artifact, attemptNum int, workDir string, feedback string) (res core.Result, gateFailed bool, err error) {
 	attemptCtx, cancel := withTimeout(ctx, s.Timeout)
 	defer cancel()
 
-	res, err = e.execute(attemptCtx, runID, s, inputs, attemptNum, workDir)
+	res, err = e.execute(attemptCtx, runID, s, inputs, attemptNum, workDir, feedback)
 	if err != nil {
 		return core.Result{}, false, err
 	}
@@ -412,7 +423,7 @@ func (e *Engine) attempt(ctx context.Context, runID core.RunID, s *flow.Step, in
 // runAgent runs the named agent with prompt in workDir, binding Task.Emit to the
 // persist-then-publish milestone path. Shared by normal steps and join arbiters
 // so an arbiter streams agent.tool milestones exactly like a normal step.
-func (e *Engine) runAgent(ctx context.Context, runID core.RunID, stepID, role, agentName, prompt, workDir string, attemptNum int, inputs []core.Artifact) (core.Result, error) {
+func (e *Engine) runAgent(ctx context.Context, runID core.RunID, stepID, role, agentName, prompt, workDir string, attemptNum int, inputs []core.Artifact, feedback string) (core.Result, error) {
 	ag, ok := e.Execs[agentName]
 	if !ok {
 		return core.Result{}, fmt.Errorf("unknown agent %q", agentName)
@@ -433,17 +444,21 @@ func (e *Engine) runAgent(ctx context.Context, runID core.RunID, stepID, role, a
 		attribute.String("magister.role", role),
 		attribute.Int("magister.attempt", attemptNum)))
 	defer span.End()
+	if len(feedback) > 0 {
+		span.SetAttributes(attribute.Int("magister.feedback_bytes", len(feedback)))
+	}
 	agentCtx := logctx.With(ctx, e.logger().With("run", string(runID), "step", stepID, "agent", agentName))
 	e.logger().DebugContext(ctx, "agent starting", "run", string(runID), "step", stepID, "agent", agentName, "role", role, "attempt", attemptNum)
 	agentStart := e.Clock.Now()
 	res, err := ag.Run(agentCtx, core.Task{
-		RunID:   runID,
-		StepID:  stepID,
-		Role:    role,
-		Prompt:  prompt,
-		Inputs:  inputs,
-		WorkDir: workDir,
-		Emit:    emit,
+		RunID:    runID,
+		StepID:   stepID,
+		Role:     role,
+		Prompt:   prompt,
+		Inputs:   inputs,
+		WorkDir:  workDir,
+		Feedback: feedback,
+		Emit:     emit,
 	})
 	dur := e.Clock.Now().Sub(agentStart)
 	e.Metrics.ObserveAgentRun(agentName, dur) // every invocation, incl. errors
@@ -465,14 +480,14 @@ func (e *Engine) runAgent(ctx context.Context, runID core.RunID, stepID, role, a
 // named executor. The caller (attempt) bounds this by the step timeout. For the
 // executor path it binds Task.Emit to persist-then-publish milestone events
 // (mirroring transition() without a step-state row).
-func (e *Engine) execute(ctx context.Context, runID core.RunID, s *flow.Step, inputs []core.Artifact, attemptNum int, workDir string) (core.Result, error) {
+func (e *Engine) execute(ctx context.Context, runID core.RunID, s *flow.Step, inputs []core.Artifact, attemptNum int, workDir string, feedback string) (core.Result, error) {
 	if s.Join != nil {
 		strat, ok := e.Joins[s.Join.Strategy]
 		if !ok {
 			return core.Result{}, fmt.Errorf("join strategy %q not implemented yet", s.Join.Strategy)
 		}
 		run := func(ctx context.Context, agentName, prompt, wd string, in []core.Artifact) (core.Result, error) {
-			return e.runAgent(ctx, runID, s.ID, "arbiter", agentName, prompt, wd, attemptNum, in)
+			return e.runAgent(ctx, runID, s.ID, "arbiter", agentName, prompt, wd, attemptNum, in, feedback)
 		}
 		e.logger().DebugContext(ctx, "join starting", "run", string(runID), "step", s.ID, "strategy", s.Join.Strategy, "inputs", len(inputs), "attempt", attemptNum)
 		joinCtx, joinSpan := tracer.Start(ctx, "join "+s.ID, trace.WithAttributes(
@@ -495,7 +510,7 @@ func (e *Engine) execute(ctx context.Context, runID core.RunID, s *flow.Step, in
 		}
 		return res, err
 	}
-	return e.runAgent(ctx, runID, s.ID, s.Role, s.Agent, promptFor(s, inputs), workDir, attemptNum, inputs)
+	return e.runAgent(ctx, runID, s.ID, s.Role, s.Agent, promptFor(s, inputs), workDir, attemptNum, inputs, feedback)
 }
 
 // commitIsolated records a successful isolated NON-join step's worktree on its
@@ -659,7 +674,7 @@ func (e *Engine) escalateJoin(ctx context.Context, runID core.RunID, s *flow.Ste
 	}
 	// approved: re-run the join exactly once. gateFailed is intentionally dropped —
 	// a gate failure on the re-run is terminal (no nested escalation).
-	res, _, execErr := e.attempt(ctx, runID, s, inputs, attemptNum+1, workDir)
+	res, _, execErr := e.attempt(ctx, runID, s, inputs, attemptNum+1, workDir, "")
 	if execErr != nil {
 		e.transition(ctx, runID, stepState(runID, s.ID, core.StepFailed, attemptNum+1, workDir, core.Result{}, execErr),
 			event.Event{StepID: s.ID, Kind: event.StepFailed, Attempt: attemptNum + 1, Err: execErr.Error()})
@@ -683,7 +698,7 @@ func (e *Engine) resolveConflictEscalation(ctx context.Context, runID core.RunID
 		event.Event{StepID: s.ID, Kind: event.StepStarted, Attempt: next})
 
 	// Rung 1: arbiter resolves the conflict markers in place.
-	ares, err := e.runAgent(ctx, runID, s.ID, "arbiter", s.Join.Agent, join.ResolveConflictPrompt(conflict.Paths), workDir, next, inputs)
+	ares, err := e.runAgent(ctx, runID, s.ID, "arbiter", s.Join.Agent, join.ResolveConflictPrompt(conflict.Paths), workDir, next, inputs, "")
 	if err != nil {
 		e.transition(ctx, runID, stepState(runID, s.ID, core.StepFailed, next, workDir, core.Result{}, err),
 			event.Event{StepID: s.ID, Kind: event.StepFailed, Attempt: next, Err: err.Error()})

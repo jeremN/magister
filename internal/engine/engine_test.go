@@ -1149,6 +1149,23 @@ func (e fileWriterExec) Run(_ context.Context, t core.Task) (core.Result, error)
 		Artifacts: []core.Artifact{{StepID: t.StepID, Path: out}}, CostUSD: cost}, nil
 }
 
+// multiFileWriterExec writes several fixed files, so one base step can seed several
+// shared files that later branches each conflict on independently (used to drive a
+// multi-conflict cascade through the escalation ladder).
+type multiFileWriterExec struct{ files map[string]string }
+
+func (e multiFileWriterExec) Run(_ context.Context, t core.Task) (core.Result, error) {
+	var arts []core.Artifact
+	for name, body := range e.files {
+		out := filepath.Join(t.WorkDir, name)
+		if err := os.WriteFile(out, []byte(body), 0o644); err != nil {
+			return core.Result{}, err
+		}
+		arts = append(arts, core.Artifact{StepID: t.StepID, Path: out})
+	}
+	return core.Result{StepID: t.StepID, Summary: "wrote files", Artifacts: arts, CostUSD: 0.01}, nil
+}
+
 func conflictFlow(onConflict flow.FailPolicy) *flow.Flow {
 	autoGate := flow.Gate{Policy: flow.GateAuto, Verifier: &flow.Verifier{Command: "true"}}
 	return &flow.Flow{Name: "f", Steps: []*flow.Step{
@@ -1289,6 +1306,97 @@ func TestMergeConflictEscalateResumesRemainingBranches(t *testing.T) {
 	}
 	if !names["c.md"] {
 		t.Errorf("integrate tree missing c.md — branch c was silently dropped after the conflict: %+v", integrate.Artifacts)
+	}
+}
+
+// markerResolvingExec resolves a merge conflict by rewriting EVERY file under the
+// worktree that still carries conflict markers with clean content — so it resolves
+// whichever file conflicts on each escalation rung (a fixed-filename arbiter can't,
+// since a cascade conflicts on a different file each time). It skips .git.
+type markerResolvingExec struct{}
+
+func (markerResolvingExec) Run(_ context.Context, t core.Task) (core.Result, error) {
+	err := filepath.Walk(t.WorkDir, func(p string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			if info.Name() == ".git" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		body, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		if strings.Contains(string(body), "<<<<<<<") {
+			if err := os.WriteFile(p, []byte("RESOLVED\n"), 0o644); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return core.Result{}, err
+	}
+	return core.Result{StepID: t.StepID, Summary: "resolved conflict markers", CostUSD: 0.01}, nil
+}
+
+// TestMergeConflictEscalateResumesAcrossTwoConflicts drives the escalation ladder to
+// depth 2: four isolated branches feed one merge join in order [a,b,c,d] where b
+// conflicts with a on shared.md AND c conflicts on a SECOND file shared2.md, while d
+// adds an independent file. The merge sequence is a (clean) → b (conflict #1, resolved
+// + approved) → resume → c (conflict #2, resolved + approved via the recursion) →
+// resume → d (clean). The committed integrate tree must carry ALL FOUR files, proving
+// no branch is dropped across two cascaded conflicts.
+func TestMergeConflictEscalateResumesAcrossTwoConflicts(t *testing.T) {
+	execs := map[string]core.Executor{
+		// a seeds both shared files; b conflicts on shared.md, c on shared2.md.
+		"a":       multiFileWriterExec{files: map[string]string{"shared.md": "A1", "shared2.md": "A2"}},
+		"b":       fileWriterExec{file: "shared.md", body: "B"},
+		"c":       fileWriterExec{file: "shared2.md", body: "C"},
+		"d":       fileWriterExec{file: "d.md", body: "D"}, // independent, merged after BOTH conflicts
+		"arbiter": markerResolvingExec{},
+	}
+	eng, st := newGitEngine(t, execs)
+	autoGate := flow.Gate{Policy: flow.GateAuto, Verifier: &flow.Verifier{Command: "true"}}
+	f := &flow.Flow{Name: "f", Steps: []*flow.Step{
+		{ID: "a", Agent: "a", Workspace: flow.WSIsolated, Gate: autoGate},
+		{ID: "b", Agent: "b", Workspace: flow.WSIsolated, Gate: autoGate},
+		{ID: "c", Agent: "c", Workspace: flow.WSIsolated, Gate: autoGate},
+		{ID: "d", Agent: "d", Workspace: flow.WSIsolated, Gate: autoGate},
+		{ID: "integrate", Needs: []string{"a", "b", "c", "d"}, Workspace: flow.WSIsolated,
+			Join: &flow.Join{Strategy: flow.JoinMerge, Agent: "arbiter", OnConflict: flow.FailEscalate}},
+	}}
+	if err := flow.Validate(f); err != nil {
+		t.Fatalf("flow invalid: %v", err)
+	}
+	if err := st.CreateRun(context.Background(), core.RunState{ID: "r1", Name: "f", Status: core.RunPending}); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Run(context.Background(), "r1", f); err != nil {
+		t.Fatalf("run should succeed after both cascaded conflicts resolve and remaining branches resume: %v", err)
+	}
+
+	got, _ := st.GetRun(context.Background(), "r1")
+	var integrate core.StepState
+	for _, s := range got.Steps {
+		if s.StepID == "integrate" {
+			integrate = s
+		}
+	}
+	if integrate.Status != core.StepSucceeded {
+		t.Fatalf("integrate status = %q, want succeeded", integrate.Status)
+	}
+	names := map[string]bool{}
+	for _, a := range integrate.Artifacts {
+		names[filepath.Base(a.Path)] = true
+	}
+	for _, want := range []string{"shared.md", "shared2.md", "d.md"} {
+		if !names[want] {
+			t.Errorf("integrate tree missing %s — a branch was dropped across the two-conflict cascade: %+v", want, integrate.Artifacts)
+		}
 	}
 }
 

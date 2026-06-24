@@ -93,3 +93,13 @@ func TestViewFitsNarrowTerminal(t *testing.T) {
 		}
 	}
 }
+
+func TestClipNegativeWidthIsSafe(t *testing.T) {
+	// clip must be total: a negative or zero width returns "" without panicking.
+	if got := clip("abc", -1); got != "" {
+		t.Fatalf("clip(_, -1) = %q, want \"\"", got)
+	}
+	if got := clip("abc", 0); got != "" {
+		t.Fatalf("clip(_, 0) = %q, want \"\"", got)
+	}
+}

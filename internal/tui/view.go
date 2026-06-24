@@ -6,6 +6,9 @@ import (
 )
 
 func clip(s string, w int) string {
+	if w <= 0 {
+		return ""
+	}
 	runes := []rune(s)
 	if len(runes) > w {
 		if w <= 1 {

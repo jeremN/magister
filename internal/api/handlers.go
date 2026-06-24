@@ -63,7 +63,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	repo := q.Get("repo")
 	base := ""
 	if repo != "" {
-		sha, err := workspace.ResolveBase(repo, q.Get("base"))
+		sha, err := workspace.ResolveBase(r.Context(), repo, q.Get("base"))
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "repo: "+err.Error())
 			return
@@ -115,8 +115,13 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCancelRun(w http.ResponseWriter, r *http.Request) {
-	if !s.Sup.Cancel(core.RunID(r.PathValue("id"))) {
-		writeError(w, http.StatusNotFound, "run not active")
+	if err := s.Sup.Cancel(r.Context(), core.RunID(r.PathValue("id"))); err != nil {
+		var ce *supervisor.CancelError
+		if errors.As(err, &ce) {
+			writeError(w, ce.Status, ce.Msg)
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	w.WriteHeader(http.StatusAccepted)
@@ -171,6 +176,10 @@ func (s *Server) handleReclaimScratch(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 	var req approveRequest
 	if err := decodeJSON(w, r, &req); err != nil {
+		if errors.Is(err, errBodyTooLarge) {
+			writeError(w, http.StatusRequestEntityTooLarge, err.Error())
+			return
+		}
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -212,6 +221,10 @@ func (s *Server) handlePush(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handlePR(w http.ResponseWriter, r *http.Request) {
 	var req prRequest
 	if err := decodeJSON(w, r, &req); err != nil {
+		if errors.Is(err, errBodyTooLarge) {
+			writeError(w, http.StatusRequestEntityTooLarge, err.Error())
+			return
+		}
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -236,6 +249,10 @@ func (s *Server) handlePR(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleShip(w http.ResponseWriter, r *http.Request) {
 	var req shipRequest
 	if err := decodeJSON(w, r, &req); err != nil {
+		if errors.Is(err, errBodyTooLarge) {
+			writeError(w, http.StatusRequestEntityTooLarge, err.Error())
+			return
+		}
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -296,10 +313,21 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	s.Metrics.WriteProm(w) // nil-safe: a nil registry writes nothing
 }
 
+// errBodyTooLarge is a sentinel returned by decodeJSON when the request body
+// exceeds maxBodyBytes. Callers check for it to write 413 instead of 400.
+var errBodyTooLarge = errors.New("request body too large")
+
 func decodeJSON(w http.ResponseWriter, r *http.Request, v any) error {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
 	if err != nil {
-		return errors.New("body too large")
+		// MaxBytesReader wraps the limit error as *http.MaxBytesError in Go 1.22.
+		var mbErr *http.MaxBytesError
+		if errors.As(err, &mbErr) {
+			return errBodyTooLarge
+		}
+		// Any other read error (torn connection, client disconnect) is NOT
+		// body-too-large; surface it raw so the caller's generic 400 path handles it.
+		return err
 	}
 	if len(body) == 0 {
 		return nil

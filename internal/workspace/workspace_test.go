@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"context"
 	"os"
 	"testing"
 
@@ -13,7 +14,7 @@ var _ core.Workspace = (*Manager)(nil)
 
 func TestManagerTeardownRunIsNoop(t *testing.T) {
 	m := &Manager{Root: t.TempDir()}
-	if err := m.TeardownRun("run1"); err != nil {
+	if err := m.TeardownRun(context.Background(), "run1"); err != nil {
 		t.Fatalf("plain Manager TeardownRun should be a no-op, got %v", err)
 	}
 }

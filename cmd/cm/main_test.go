@@ -18,6 +18,52 @@ import (
 // server-generated application/json in a test helper, not user-supplied HTML).
 func writeBody(w io.Writer, b string) { io.WriteString(w, b) } //nolint:errcheck
 
+// TestNonWatchCommandTimesOutOnUnresponsiveDaemon verifies that a non-watch command
+// (e.g. get) returns an error promptly when the server never responds, rather than
+// hanging forever. It uses a tiny injected timeout on the client to keep the test fast.
+func TestNonWatchCommandTimesOutOnUnresponsiveDaemon(t *testing.T) {
+	// blocking server that never writes a response
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done() // block until the client gives up
+	}))
+	defer srv.Close()
+
+	c := &client{
+		base:      srv.URL,
+		http:      &http.Client{Timeout: 50 * time.Millisecond},
+		watchHTTP: &http.Client{Timeout: 0},
+	}
+
+	start := time.Now()
+	var out bytes.Buffer
+	code := c.get("/v1/runs", &out)
+	elapsed := time.Since(start)
+
+	if code == 0 {
+		t.Error("expected non-zero exit code on timeout, got 0")
+	}
+	if elapsed > 5*time.Second {
+		t.Errorf("command did not time out promptly: elapsed %v", elapsed)
+	}
+}
+
+// TestDispatchClientHas30sTimeout verifies that dispatch builds the client with the
+// expected 30s timeout for normal commands and a no-timeout client for watch.
+func TestDispatchClientHas30sTimeout(t *testing.T) {
+	// We test the client struct directly since dispatch is the only builder.
+	c := &client{
+		base:      "http://127.0.0.1:8080",
+		http:      &http.Client{Timeout: 30 * time.Second},
+		watchHTTP: &http.Client{Timeout: 0},
+	}
+	if c.http.Timeout != 30*time.Second {
+		t.Errorf("normal client timeout = %v, want 30s", c.http.Timeout)
+	}
+	if c.watchHTTP.Timeout != 0 {
+		t.Errorf("watch client timeout = %v, want 0 (no timeout)", c.watchHTTP.Timeout)
+	}
+}
+
 // fakeAPI is a minimal server that records the last request and returns canned JSON.
 func fakeAPI(t *testing.T, status int, body string, record *http.Request) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

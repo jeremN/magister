@@ -138,7 +138,7 @@ func approveStep(t *testing.T, base, id, stepID string) {
 func TestE2EAutoFlowStreamsToCompletion(t *testing.T) {
 	base, stop := startDaemon(t, filepath.Join(t.TempDir(), "e2e.db"))
 	defer stop()
-	id := postFlow(t, base, "name: f\nsteps:\n  - id: a\n    agent: mock\n    gate: { policy: auto, verifier: { command: \"true\" } }\n")
+	id := postFlow(t, base, "name: f\nsteps:\n  - id: a\n    agent: mock\n    prompt: p\n    gate: { policy: auto, verifier: { command: \"true\" } }\n")
 
 	resp, err := http.Get(base + "/v1/runs/" + id + "/events")
 	if err != nil {
@@ -161,7 +161,7 @@ func TestE2EAutoFlowStreamsToCompletion(t *testing.T) {
 func TestE2EManualGateBlocksThenApprove(t *testing.T) {
 	base, stop := startDaemon(t, filepath.Join(t.TempDir(), "gate.db"))
 	defer stop()
-	id := postFlow(t, base, "name: f\nsteps:\n  - id: a\n    agent: mock\n    gate: { policy: manual }\n")
+	id := postFlow(t, base, "name: f\nsteps:\n  - id: a\n    agent: mock\n    prompt: p\n    gate: { policy: manual }\n")
 
 	waitStatus(t, base, id, "running") // run is running while the step awaits the gate
 	waitStepStatus(t, base, id, "a", "awaiting_gate")
@@ -232,7 +232,7 @@ func TestE2EEscalateBlocksThenApprove(t *testing.T) {
 	defer stop()
 	// Auto gate whose verifier fails + on_fail: escalate, no retry → the gate
 	// failure is escalated to a human; approving it completes the run.
-	id := postFlow(t, base, "name: f\nsteps:\n  - id: a\n    agent: mock\n    gate: { policy: auto, verifier: { command: \"false\" }, on_fail: escalate }\n")
+	id := postFlow(t, base, "name: f\nsteps:\n  - id: a\n    agent: mock\n    prompt: p\n    gate: { policy: auto, verifier: { command: \"false\" }, on_fail: escalate }\n")
 
 	waitStatus(t, base, id, "running")
 	waitStepStatus(t, base, id, "a", "awaiting_gate")
@@ -245,7 +245,7 @@ func TestE2EEscalateBlocksThenApprove(t *testing.T) {
 // the resumed step shows pending (reset-to-pending) until it re-reaches the gate.
 func TestE2EEscalateKillAndResume(t *testing.T) {
 	db := filepath.Join(t.TempDir(), "esc-resume.db")
-	const yaml = "name: f\nsteps:\n  - id: a\n    agent: mock\n    gate: { policy: auto, verifier: { command: \"false\" }, on_fail: escalate }\n"
+	const yaml = "name: f\nsteps:\n  - id: a\n    agent: mock\n    prompt: p\n    gate: { policy: auto, verifier: { command: \"false\" }, on_fail: escalate }\n"
 
 	// Run until the escalated gate parks at awaiting_gate, then "crash".
 	id := crashDaemonAtGate(t, db, yaml, "a")
@@ -262,7 +262,7 @@ func TestE2EEscalateKillAndResume(t *testing.T) {
 func TestE2EKillAndResume(t *testing.T) {
 	db := filepath.Join(t.TempDir(), "resume.db")
 	// a two-step chain; step a has a manual gate, step b auto-passes after a.
-	const yaml = "name: f\nsteps:\n  - id: a\n    agent: mock\n    gate: { policy: manual }\n  - id: b\n    needs: [a]\n    agent: mock\n    gate: { policy: auto, verifier: { command: \"true\" } }\n"
+	const yaml = "name: f\nsteps:\n  - id: a\n    agent: mock\n    prompt: p\n    gate: { policy: manual }\n  - id: b\n    needs: [a]\n    agent: mock\n    prompt: p\n    gate: { policy: auto, verifier: { command: \"true\" } }\n"
 
 	// Run until step a blocks at the gate, then "crash" — the run row is left
 	// "running" in the DB with step a awaiting_gate.
@@ -291,9 +291,9 @@ func TestE2EIsolatedWorktreesTornDown(t *testing.T) {
 	base, stop := startDaemon(t, filepath.Join(tmp, "iso.db"))
 	defer stop()
 	id := postFlow(t, base, "name: f\nconcurrency: 2\nsteps:\n"+
-		"  - id: root\n    agent: mock\n    gate: { policy: auto, verifier: { command: \"true\" } }\n"+
-		"  - id: a\n    needs: [root]\n    agent: mock\n    workspace: isolated\n    gate: { policy: auto, verifier: { command: \"true\" } }\n"+
-		"  - id: b\n    needs: [root]\n    agent: mock\n    workspace: isolated\n    gate: { policy: auto, verifier: { command: \"true\" } }\n")
+		"  - id: root\n    agent: mock\n    prompt: p\n    gate: { policy: auto, verifier: { command: \"true\" } }\n"+
+		"  - id: a\n    needs: [root]\n    agent: mock\n    prompt: p\n    workspace: isolated\n    gate: { policy: auto, verifier: { command: \"true\" } }\n"+
+		"  - id: b\n    needs: [root]\n    agent: mock\n    prompt: p\n    workspace: isolated\n    gate: { policy: auto, verifier: { command: \"true\" } }\n")
 	waitStatus(t, base, id, "succeeded")
 
 	runDir := filepath.Join(tmp, "runs", id)

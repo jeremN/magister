@@ -79,7 +79,7 @@ func (s *Supervisor) prCore(ctx context.Context, runID core.RunID, opts PROpts) 
 	if opts.Base != "" && !safePRRef(opts.Base) {
 		return PRResult{}, false, prErr(http.StatusBadRequest, "invalid base branch %q", opts.Base)
 	}
-	remoteURL, err := workspace.ResolveRemote(rs.Repo, opts.Remote)
+	remoteURL, err := workspace.ResolveRemote(ctx, rs.Repo, opts.Remote)
 	if err != nil {
 		return PRResult{}, false, prErr(http.StatusBadRequest, "remote: %v", err)
 	}
@@ -93,7 +93,7 @@ func (s *Supervisor) prCore(ctx context.Context, runID core.RunID, opts PROpts) 
 	head := branch
 	headOwner := owner
 	if opts.HeadRepo != "" {
-		forkURL, ferr := workspace.ResolveRemote(rs.Repo, opts.HeadRepo)
+		forkURL, ferr := workspace.ResolveRemote(ctx, rs.Repo, opts.HeadRepo)
 		if ferr != nil {
 			return PRResult{}, false, prErr(http.StatusBadRequest, "head-repo: %v", ferr)
 		}

@@ -37,7 +37,7 @@ func TestMergeConflictAbortFails(t *testing.T) {
 	if errors.As(err, &ce) {
 		t.Fatal("abort should NOT surface a ConflictError (that is escalate-only)")
 	}
-	if len(conflictedPaths(joinDir)) != 0 {
+	if len(conflictedPaths(context.Background(), joinDir)) != 0 {
 		t.Error("abort should leave no conflict markers (git merge --abort)")
 	}
 }

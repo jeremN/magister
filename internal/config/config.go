@@ -64,8 +64,8 @@ func Parse(args []string, env func(string) string) Config {
 	if v := env("MAGISTER_LOG_LEVEL"); v != "" && !flagSet(fs, "log-level") {
 		c.LogLevel = v
 	}
-	if c.OTelEndpoint == "" {
-		c.OTelEndpoint = env("OTEL_EXPORTER_OTLP_ENDPOINT")
+	if v := env("OTEL_EXPORTER_OTLP_ENDPOINT"); v != "" && !flagSet(fs, "otel-endpoint") {
+		c.OTelEndpoint = v
 	}
 	if v := env("OTEL_SERVICE_NAME"); v != "" && !flagSet(fs, "otel-service-name") {
 		c.OTelServiceName = v

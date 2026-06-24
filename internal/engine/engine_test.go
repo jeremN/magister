@@ -61,10 +61,10 @@ func mustCreate(t *testing.T, st *store.Mem, id core.RunID, f *flow.Flow) {
 
 func TestEngineFanOutFanIn(t *testing.T) {
 	f := &flow.Flow{Name: "feat", Concurrency: 2, Steps: []*flow.Step{
-		{ID: "plan", Agent: "opus", Gate: flow.Gate{Policy: flow.GateManual}},
-		{ID: "api", Needs: []string{"plan"}, Agent: "sonnet", Workspace: flow.WSIsolated,
+		{ID: "plan", Agent: "opus", Prompt: "p", Gate: flow.Gate{Policy: flow.GateManual}},
+		{ID: "api", Needs: []string{"plan"}, Agent: "sonnet", Prompt: "p", Workspace: flow.WSIsolated,
 			Gate: flow.Gate{Policy: flow.GateAuto, Verifier: &flow.Verifier{Command: "true"}}},
-		{ID: "ui", Needs: []string{"plan"}, Agent: "gemini", Workspace: flow.WSIsolated,
+		{ID: "ui", Needs: []string{"plan"}, Agent: "gemini", Prompt: "p", Workspace: flow.WSIsolated,
 			Gate: flow.Gate{Policy: flow.GateAuto, Verifier: &flow.Verifier{Command: "true"}}},
 		{ID: "integrate", Needs: []string{"api", "ui"}, Workspace: flow.WSIsolated,
 			Join: &flow.Join{Strategy: flow.JoinMerge}, Gate: flow.Gate{Policy: flow.GateManual}},
@@ -157,12 +157,12 @@ func TestEngineWideFanInNoDeadlock(t *testing.T) {
 	// 20 real git worktrees + a 20-branch merge take a few seconds, and much longer
 	// under CI load, so the bound is generous on purpose (a true deadlock never
 	// returns regardless).
-	steps := []*flow.Step{{ID: "root", Agent: "opus", Gate: flow.Gate{Policy: flow.GateManual}}}
+	steps := []*flow.Step{{ID: "root", Agent: "opus", Prompt: "p", Gate: flow.Gate{Policy: flow.GateManual}}}
 	var needs []string
 	for i := 0; i < 20; i++ {
 		id := fmt.Sprintf("w%d", i)
 		needs = append(needs, id)
-		steps = append(steps, &flow.Step{ID: id, Needs: []string{"root"}, Agent: "sonnet", Workspace: flow.WSIsolated,
+		steps = append(steps, &flow.Step{ID: id, Needs: []string{"root"}, Agent: "sonnet", Prompt: "p", Workspace: flow.WSIsolated,
 			Gate: flow.Gate{Policy: flow.GateManual}})
 	}
 	steps = append(steps, &flow.Step{ID: "join", Needs: needs, Workspace: flow.WSIsolated,
@@ -285,6 +285,41 @@ func TestTransitionDoesNotPublishOriginalOnStoreError(t *testing.T) {
 	}
 	if got[0].Kind != event.StepFailed || !strings.Contains(got[0].Err, "store:") {
 		t.Errorf("expected store-error frame, got %+v", got[0])
+	}
+}
+
+// TestStepSuccessTransitionPersistFailureFails asserts that when the store
+// rejects the StepSucceeded persist, eng.Run returns a non-nil error (the run
+// fails) rather than silently reporting success.
+func TestStepSuccessTransitionPersistFailureFails(t *testing.T) {
+	f := &flow.Flow{Name: "persist-fail", Steps: []*flow.Step{
+		{ID: "a", Agent: "mock", Prompt: "p", Gate: flow.Gate{Policy: flow.GateManual}},
+	}}
+	if err := flow.Validate(f); err != nil {
+		t.Fatalf("flow invalid: %v", err)
+	}
+
+	bus := event.NewBus()
+	eng := &Engine{
+		Execs: mocks(),
+		WS:    &workspace.Manager{Root: t.TempDir()},
+		Gate:  &gate.Evaluator{Approver: gate.AutoApprover{}, Verifier: gate.CommandVerifier{}},
+		Joins: join.Default(),
+		Store: failingStore{store.NewMem()},
+		Bus:   bus,
+		Sem:   nil,
+		Clock: core.SystemClock{},
+	}
+	// failingStore.CreateRun is not overridden, so seed via the inner store.
+	inner := store.NewMem()
+	if err := inner.CreateRun(context.Background(), core.RunState{ID: "r1", Name: f.Name, Status: core.RunPending}); err != nil {
+		t.Fatal(err)
+	}
+	eng.Store = failingStore{inner}
+
+	err := eng.Run(context.Background(), "r1", f)
+	if err == nil {
+		t.Fatal("eng.Run returned nil; want non-nil error because the StepSucceeded persist failed")
 	}
 }
 
@@ -566,11 +601,11 @@ type teardownSpy struct {
 	runs []core.RunID
 }
 
-func (s *teardownSpy) TeardownRun(id core.RunID) error {
+func (s *teardownSpy) TeardownRun(ctx context.Context, id core.RunID) error {
 	s.mu.Lock()
 	s.runs = append(s.runs, id)
 	s.mu.Unlock()
-	return s.Manager.TeardownRun(id)
+	return s.Manager.TeardownRun(ctx, id)
 }
 
 func TestRunDAGTearsDownWorkspaceAtEnd(t *testing.T) {
@@ -666,7 +701,7 @@ func (emittingExec) Run(ctx context.Context, tk core.Task) (core.Result, error) 
 
 func TestEngineForwardsAgentMilestones(t *testing.T) {
 	f := &flow.Flow{Name: "feat", Concurrency: 1, Steps: []*flow.Step{
-		{ID: "s1", Agent: "x", Gate: flow.Gate{Policy: flow.GateAuto, Verifier: &flow.Verifier{Command: "true"}}},
+		{ID: "s1", Agent: "x", Prompt: "p", Gate: flow.Gate{Policy: flow.GateAuto, Verifier: &flow.Verifier{Command: "true"}}},
 	}}
 	if err := flow.Validate(f); err != nil {
 		t.Fatalf("flow invalid: %v", err)
@@ -1090,6 +1125,78 @@ func TestIsolatedStepCommitsAndStampsRefs(t *testing.T) {
 	}
 }
 
+// TestIsolatedStepArtifactAliasingRace is a -race regression test for the
+// store.Mem artifact-aliasing bug: SaveStepTransition previously stored the
+// caller's Artifacts slice directly, so commitIsolated's in-place branch/commit
+// stamp raced with a concurrent GetRun's cloneRun. The fix was a write-side
+// cloneArtifacts in SaveStepTransition; this test would catch a regression.
+//
+// Strategy: run an isolated step (which triggers commitIsolated → in-place
+// branch/commit stamp) while concurrently polling GetRun from multiple
+// goroutines. Under -race this surfaces any shared-slice write/read conflict.
+func TestIsolatedStepArtifactAliasingRace(t *testing.T) {
+	execs := map[string]core.Executor{
+		"writer": fileWriterExec{file: "out.txt", body: "data"},
+	}
+	eng, st := newGitEngine(t, execs)
+	f := &flow.Flow{Name: "f", Steps: []*flow.Step{
+		{ID: "a", Agent: "writer", Workspace: flow.WSIsolated,
+			Gate: flow.Gate{Policy: flow.GateAuto, Verifier: &flow.Verifier{Command: "true"}}},
+	}}
+	if err := st.CreateRun(context.Background(), core.RunState{ID: "r1", Name: "f", Status: core.RunPending}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Spawn goroutines that poll GetRun concurrently while the engine runs.
+	// They read .Steps[*].Artifacts, which commitIsolated stamps in-place; under
+	// the old bug this was a data race. Goroutines stop once done is closed.
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-done:
+					return
+				default:
+					rs, _ := st.GetRun(context.Background(), "r1")
+					for _, step := range rs.Steps {
+						// Access artifact fields to exercise the read side
+						// of the formerly-aliased slice.
+						for _, a := range step.Artifacts {
+							_ = a.Branch
+							_ = a.Commit
+						}
+					}
+				}
+			}
+		}()
+	}
+
+	if err := eng.Run(context.Background(), "r1", f); err != nil {
+		close(done)
+		wg.Wait()
+		t.Fatalf("run: %v", err)
+	}
+	close(done)
+	wg.Wait()
+
+	// Confirm the step succeeded and artifacts were stamped.
+	got, _ := st.GetRun(context.Background(), "r1")
+	if got.Status != core.RunSucceeded {
+		t.Fatalf("run status = %q, want succeeded", got.Status)
+	}
+	if len(got.Steps) == 0 || len(got.Steps[0].Artifacts) == 0 {
+		t.Fatalf("no artifacts on isolated step: %+v", got.Steps)
+	}
+	a := got.Steps[0].Artifacts[0]
+	if a.Branch != "step/a" || a.Commit == "" {
+		t.Errorf("artifact not stamped: branch=%q commit=%q", a.Branch, a.Commit)
+	}
+}
+
 func TestJoinConflictEscalateRejectAborts(t *testing.T) {
 	st := store.NewMem()
 	e := &Engine{
@@ -1147,6 +1254,23 @@ func (e fileWriterExec) Run(_ context.Context, t core.Task) (core.Result, error)
 	// stamps its branch onto it — the merge join needs branch-backed inputs.
 	return core.Result{StepID: t.StepID, Summary: "wrote " + e.file,
 		Artifacts: []core.Artifact{{StepID: t.StepID, Path: out}}, CostUSD: cost}, nil
+}
+
+// multiFileWriterExec writes several fixed files, so one base step can seed several
+// shared files that later branches each conflict on independently (used to drive a
+// multi-conflict cascade through the escalation ladder).
+type multiFileWriterExec struct{ files map[string]string }
+
+func (e multiFileWriterExec) Run(_ context.Context, t core.Task) (core.Result, error) {
+	var arts []core.Artifact
+	for name, body := range e.files {
+		out := filepath.Join(t.WorkDir, name)
+		if err := os.WriteFile(out, []byte(body), 0o644); err != nil {
+			return core.Result{}, err
+		}
+		arts = append(arts, core.Artifact{StepID: t.StepID, Path: out})
+	}
+	return core.Result{StepID: t.StepID, Summary: "wrote files", Artifacts: arts, CostUSD: 0.01}, nil
 }
 
 func conflictFlow(onConflict flow.FailPolicy) *flow.Flow {
@@ -1231,6 +1355,155 @@ func TestMergeConflictEscalateRejectFails(t *testing.T) {
 	}
 	if err := eng.Run(context.Background(), "r1", conflictFlow(flow.FailEscalate)); err == nil {
 		t.Fatal("run should fail when the human rejects the conflict resolution")
+	}
+}
+
+// TestMergeConflictEscalateResumesRemainingBranches proves that an escalation
+// which resolves the FIRST conflicting branch does not silently drop the branches
+// merged after it. Three isolated steps feed one merge join: a and b both write
+// shared.md (so b conflicts when merged after a), while c adds an independent file.
+// The arbiter resolves the a/b conflict; after the human approves, the join must
+// RESUME and merge c too — so the committed integrate tree carries all three files.
+func TestMergeConflictEscalateResumesRemainingBranches(t *testing.T) {
+	execs := map[string]core.Executor{
+		"a":       fileWriterExec{file: "shared.md", body: "A"},
+		"b":       fileWriterExec{file: "shared.md", body: "B"},
+		"c":       fileWriterExec{file: "c.md", body: "C"}, // independent file, merged AFTER the conflict
+		"arbiter": fileWriterExec{file: "shared.md", body: "RESOLVED"},
+	}
+	eng, st := newGitEngine(t, execs)
+	autoGate := flow.Gate{Policy: flow.GateAuto, Verifier: &flow.Verifier{Command: "true"}}
+	// Needs order [a,b,c] fixes the merge order: a (clean), b (conflict), c (clean).
+	f := &flow.Flow{Name: "f", Steps: []*flow.Step{
+		{ID: "a", Agent: "a", Prompt: "p", Workspace: flow.WSIsolated, Gate: autoGate},
+		{ID: "b", Agent: "b", Prompt: "p", Workspace: flow.WSIsolated, Gate: autoGate},
+		{ID: "c", Agent: "c", Prompt: "p", Workspace: flow.WSIsolated, Gate: autoGate},
+		{ID: "integrate", Needs: []string{"a", "b", "c"}, Workspace: flow.WSIsolated,
+			Join: &flow.Join{Strategy: flow.JoinMerge, Agent: "arbiter", OnConflict: flow.FailEscalate}},
+	}}
+	if err := flow.Validate(f); err != nil {
+		t.Fatalf("flow invalid: %v", err)
+	}
+	if err := st.CreateRun(context.Background(), core.RunState{ID: "r1", Name: "f", Status: core.RunPending}); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Run(context.Background(), "r1", f); err != nil {
+		t.Fatalf("run should succeed after the conflict is resolved and remaining branches resume: %v", err)
+	}
+
+	got, _ := st.GetRun(context.Background(), "r1")
+	var integrate core.StepState
+	for _, s := range got.Steps {
+		if s.StepID == "integrate" {
+			integrate = s
+		}
+	}
+	if integrate.Status != core.StepSucceeded {
+		t.Fatalf("integrate status = %q, want succeeded", integrate.Status)
+	}
+	// The committed integrate tree must carry BOTH the resolved conflict file AND
+	// branch c's independent file — c is merged only if the join resumed after the
+	// escalation. CommittedResult enumerates every tracked file as an artifact.
+	names := map[string]bool{}
+	for _, a := range integrate.Artifacts {
+		names[filepath.Base(a.Path)] = true
+	}
+	if !names["shared.md"] {
+		t.Errorf("integrate tree missing shared.md (the resolved conflict): %+v", integrate.Artifacts)
+	}
+	if !names["c.md"] {
+		t.Errorf("integrate tree missing c.md — branch c was silently dropped after the conflict: %+v", integrate.Artifacts)
+	}
+}
+
+// markerResolvingExec resolves a merge conflict by rewriting EVERY file under the
+// worktree that still carries conflict markers with clean content — so it resolves
+// whichever file conflicts on each escalation rung (a fixed-filename arbiter can't,
+// since a cascade conflicts on a different file each time). It skips .git.
+type markerResolvingExec struct{}
+
+func (markerResolvingExec) Run(_ context.Context, t core.Task) (core.Result, error) {
+	err := filepath.Walk(t.WorkDir, func(p string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			if info.Name() == ".git" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		body, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		if strings.Contains(string(body), "<<<<<<<") {
+			if err := os.WriteFile(p, []byte("RESOLVED\n"), 0o644); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return core.Result{}, err
+	}
+	return core.Result{StepID: t.StepID, Summary: "resolved conflict markers", CostUSD: 0.01}, nil
+}
+
+// TestMergeConflictEscalateResumesAcrossTwoConflicts drives the escalation ladder to
+// depth 2: four isolated branches feed one merge join in order [a,b,c,d] where b
+// conflicts with a on shared.md AND c conflicts on a SECOND file shared2.md, while d
+// adds an independent file. The merge sequence is a (clean) → b (conflict #1, resolved
+// + approved) → resume → c (conflict #2, resolved + approved via the recursion) →
+// resume → d (clean). The committed integrate tree must carry ALL FOUR files, proving
+// no branch is dropped across two cascaded conflicts.
+func TestMergeConflictEscalateResumesAcrossTwoConflicts(t *testing.T) {
+	execs := map[string]core.Executor{
+		// a seeds both shared files; b conflicts on shared.md, c on shared2.md.
+		"a":       multiFileWriterExec{files: map[string]string{"shared.md": "A1", "shared2.md": "A2"}},
+		"b":       fileWriterExec{file: "shared.md", body: "B"},
+		"c":       fileWriterExec{file: "shared2.md", body: "C"},
+		"d":       fileWriterExec{file: "d.md", body: "D"}, // independent, merged after BOTH conflicts
+		"arbiter": markerResolvingExec{},
+	}
+	eng, st := newGitEngine(t, execs)
+	autoGate := flow.Gate{Policy: flow.GateAuto, Verifier: &flow.Verifier{Command: "true"}}
+	f := &flow.Flow{Name: "f", Steps: []*flow.Step{
+		{ID: "a", Agent: "a", Prompt: "p", Workspace: flow.WSIsolated, Gate: autoGate},
+		{ID: "b", Agent: "b", Prompt: "p", Workspace: flow.WSIsolated, Gate: autoGate},
+		{ID: "c", Agent: "c", Prompt: "p", Workspace: flow.WSIsolated, Gate: autoGate},
+		{ID: "d", Agent: "d", Prompt: "p", Workspace: flow.WSIsolated, Gate: autoGate},
+		{ID: "integrate", Needs: []string{"a", "b", "c", "d"}, Workspace: flow.WSIsolated,
+			Join: &flow.Join{Strategy: flow.JoinMerge, Agent: "arbiter", OnConflict: flow.FailEscalate}},
+	}}
+	if err := flow.Validate(f); err != nil {
+		t.Fatalf("flow invalid: %v", err)
+	}
+	if err := st.CreateRun(context.Background(), core.RunState{ID: "r1", Name: "f", Status: core.RunPending}); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Run(context.Background(), "r1", f); err != nil {
+		t.Fatalf("run should succeed after both cascaded conflicts resolve and remaining branches resume: %v", err)
+	}
+
+	got, _ := st.GetRun(context.Background(), "r1")
+	var integrate core.StepState
+	for _, s := range got.Steps {
+		if s.StepID == "integrate" {
+			integrate = s
+		}
+	}
+	if integrate.Status != core.StepSucceeded {
+		t.Fatalf("integrate status = %q, want succeeded", integrate.Status)
+	}
+	names := map[string]bool{}
+	for _, a := range integrate.Artifacts {
+		names[filepath.Base(a.Path)] = true
+	}
+	for _, want := range []string{"shared.md", "shared2.md", "d.md"} {
+		if !names[want] {
+			t.Errorf("integrate tree missing %s — a branch was dropped across the two-conflict cascade: %+v", want, integrate.Artifacts)
+		}
 	}
 }
 
@@ -1366,5 +1639,46 @@ func TestExecErrorThreadsNoFeedback(t *testing.T) {
 		if fb != "" {
 			t.Errorf("attempt %d feedback = %q, want empty (exec errors carry no feedback)", i+1, fb)
 		}
+	}
+}
+
+// TestStepCanceledWhileAwaitingGate asserts that a step canceled while blocked
+// on a manual gate is recorded as StepCanceled (not StepFailed).
+func TestStepCanceledWhileAwaitingGate(t *testing.T) {
+	st := store.NewMem()
+	ba := &blockingApprover{gate: make(chan bool, 1), await: make(chan struct{})}
+	e := &Engine{
+		Execs: map[string]core.Executor{"mock": executor.Mock{Name: "mock"}},
+		WS:    &workspace.Manager{Root: t.TempDir()},
+		Gate:  &gate.Evaluator{Approver: ba, Verifier: gate.CommandVerifier{}},
+		Joins: join.Default(),
+		Store: st, Bus: event.NewBus(), Clock: core.SystemClock{},
+	}
+	f := &flow.Flow{Name: "gc", Steps: []*flow.Step{
+		{ID: "a", Agent: "mock", Gate: flow.Gate{Policy: flow.GateManual}},
+	}}
+	mustCreate(t, st, "r1", f)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- e.Run(ctx, "r1", f) }()
+
+	// Wait until the step is blocked inside the gate's Approve call.
+	<-ba.await
+	// Cancel the run while the gate is still waiting for a human decision.
+	cancel()
+
+	if err := <-done; err == nil {
+		t.Fatal("expected cancellation error from Run")
+	}
+	got, _ := st.GetRun(context.Background(), "r1")
+	if got.Status != core.RunCanceled {
+		t.Fatalf("run status = %q, want canceled", got.Status)
+	}
+	if len(got.Steps) == 0 {
+		t.Fatal("no step state recorded")
+	}
+	if got.Steps[0].Status != core.StepCanceled {
+		t.Fatalf("step status = %q, want canceled", got.Steps[0].Status)
 	}
 }

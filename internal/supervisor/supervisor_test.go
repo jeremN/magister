@@ -2,6 +2,8 @@ package supervisor
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -16,6 +18,69 @@ import (
 	"concentus/internal/store"
 	"concentus/internal/workspace"
 )
+
+// failGetRunStore wraps a Store and forces GetRun to return a non-ErrRunNotFound
+// error, simulating a transient store failure (e.g. DB unreachable).
+type failGetRunStore struct {
+	core.Store
+	err error
+}
+
+func (f failGetRunStore) GetRun(context.Context, core.RunID) (core.RunState, error) {
+	return core.RunState{}, f.err
+}
+
+// TestSupervisorCancelStoreErrorReturns500 verifies that a store-load failure on
+// Cancel (for an id not in the active map) surfaces as a plain (non-*CancelError)
+// error, which the handler maps to 500 — NOT a 404 "unknown run".
+func TestSupervisorCancelStoreErrorReturns500(t *testing.T) {
+	st := store.NewMem()
+	reg := NewApprovalRegistry()
+	boom := fmt.Errorf("db unreachable")
+	sup := New(testEngine(t, st, reg, &workspace.Manager{Root: t.TempDir()}), failGetRunStore{Store: st, err: boom}, reg)
+
+	err := sup.Cancel(context.Background(), "absent")
+	if err == nil {
+		t.Fatal("expected an error on store-load failure")
+	}
+	var ce *CancelError
+	if errors.As(err, &ce) {
+		t.Fatalf("store error must NOT be a *CancelError (would mislead 404/409), got %#v", ce)
+	}
+	if !errors.Is(err, boom) {
+		t.Errorf("store error not wrapped: got %v, want it to wrap %v", err, boom)
+	}
+}
+
+// TestSupervisorCancelUnknownReturns404 / Terminal409 cover the supervisor-level
+// branches directly (the API handler tests cover the HTTP mapping).
+func TestSupervisorCancelUnknownReturns404(t *testing.T) {
+	st := store.NewMem()
+	reg := NewApprovalRegistry()
+	sup := New(testEngine(t, st, reg, &workspace.Manager{Root: t.TempDir()}), st, reg)
+
+	err := sup.Cancel(context.Background(), "nope")
+	var ce *CancelError
+	if !errors.As(err, &ce) || ce.Status != 404 {
+		t.Fatalf("unknown run Cancel = %v, want *CancelError{404}", err)
+	}
+}
+
+func TestSupervisorCancelTerminalReturns409(t *testing.T) {
+	ctx := context.Background()
+	st := store.NewMem()
+	reg := NewApprovalRegistry()
+	sup := New(testEngine(t, st, reg, &workspace.Manager{Root: t.TempDir()}), st, reg)
+	if err := st.CreateRun(ctx, core.RunState{ID: "done", Status: core.RunSucceeded}); err != nil {
+		t.Fatal(err)
+	}
+
+	err := sup.Cancel(ctx, "done")
+	var ce *CancelError
+	if !errors.As(err, &ce) || ce.Status != 409 {
+		t.Fatalf("terminal run Cancel = %v, want *CancelError{409}", err)
+	}
+}
 
 func testEngine(t *testing.T, st core.Store, reg *ApprovalRegistry, ws core.Workspace) *engine.Engine {
 	t.Helper()
@@ -59,7 +124,7 @@ func TestSupervisorCancelStopsRun(t *testing.T) {
 	}}
 	id, _ := sup.Submit(context.Background(), f, "x", "", "")
 	// the gate is blocking; cancel the run
-	waitFor(t, func() bool { return sup.Cancel(id) })
+	waitFor(t, func() bool { return sup.Cancel(context.Background(), id) == nil })
 	waitForStatus(t, st, id, core.RunCanceled)
 	sup.Shutdown(time.Second)
 }
@@ -119,7 +184,7 @@ func TestResumeAllContinuesPastCorruptFlow(t *testing.T) {
 	if err := st.CreateRun(ctx, core.RunState{ID: "r1", Name: "bad", FlowYAML: "::: not yaml :::", Status: core.RunRunning}); err != nil {
 		t.Fatal(err)
 	}
-	const good = "name: f\nsteps:\n  - id: a\n    agent: mock\n    gate: { policy: manual }\n"
+	const good = "name: f\nsteps:\n  - id: a\n    agent: mock\n    prompt: p\n    gate: { policy: manual }\n"
 	if err := st.CreateRun(ctx, core.RunState{ID: "r2", Name: "f", FlowYAML: good, Status: core.RunRunning}); err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +206,7 @@ type provisionSpy struct {
 	got []string // "repo|base" per call
 }
 
-func (p *provisionSpy) Provision(id core.RunID, repo, base string) error {
+func (p *provisionSpy) Provision(_ context.Context, id core.RunID, repo, base string) error {
 	p.mu.Lock()
 	p.got = append(p.got, repo+"|"+base)
 	p.mu.Unlock()
@@ -149,7 +214,7 @@ func (p *provisionSpy) Provision(id core.RunID, repo, base string) error {
 }
 
 // autoStepYAML is a one-step flow with an auto gate, so the run completes without approval.
-const autoStepYAML = "name: f\nsteps:\n  - id: a\n    agent: mock\n    gate: { policy: auto, verifier: { command: \"true\" } }\n"
+const autoStepYAML = "name: f\nsteps:\n  - id: a\n    agent: mock\n    prompt: p\n    gate: { policy: auto, verifier: { command: \"true\" } }\n"
 
 func TestSubmitProvisionsAndPersistsRepoBase(t *testing.T) {
 	st := store.NewMem()

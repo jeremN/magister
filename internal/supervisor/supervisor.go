@@ -67,7 +67,7 @@ func (s *Supervisor) Submit(ctx context.Context, f *flow.Flow, flowYAML, repo, b
 	}); err != nil {
 		return "", fmt.Errorf("create run: %w", err)
 	}
-	if err := s.engine.Provision(id, repo, base); err != nil {
+	if err := s.engine.Provision(ctx, id, repo, base); err != nil {
 		return "", fmt.Errorf("provision run: %w", err)
 	}
 	s.start(ctx, id, func(runCtx context.Context) error { return s.engine.Run(runCtx, id, f) })
@@ -103,16 +103,36 @@ func (s *Supervisor) start(parent context.Context, id core.RunID, run func(conte
 	}()
 }
 
-// Cancel cancels an active run. Returns false if the run isn't active.
-func (s *Supervisor) Cancel(id core.RunID) bool {
+// CancelError carries an HTTP status so the API layer maps cancel failures without
+// string-matching. Status 404 = unknown run; 409 = run is known but not active.
+type CancelError struct {
+	Status int
+	Msg    string
+}
+
+func (e *CancelError) Error() string { return e.Msg }
+
+// Cancel cancels an active run. Returns nil on success, *CancelError(404) for an
+// unknown run, *CancelError(409) for a known-but-terminal (non-active) run, and a
+// plain (non-*CancelError) error on a store-load failure → the handler maps it to 500.
+func (s *Supervisor) Cancel(ctx context.Context, id core.RunID) error {
 	s.mu.Lock()
 	cancel, ok := s.runs[id]
 	s.mu.Unlock()
-	if !ok {
-		return false
+	if ok {
+		cancel()
+		return nil
 	}
-	cancel()
-	return true
+	// Not in the active map: distinguish unknown vs already-terminal via the store.
+	if _, err := s.store.GetRun(ctx, id); err != nil {
+		if errors.Is(err, core.ErrRunNotFound) {
+			return &CancelError{Status: http.StatusNotFound, Msg: "unknown run"}
+		}
+		// A transient store failure is NOT a missing run: surface it as a plain error
+		// so the handler's non-*CancelError fallback writes 500 (mirrors Retry/ReclaimRun).
+		return fmt.Errorf("load run %q: %w", id, err)
+	}
+	return &CancelError{Status: http.StatusConflict, Msg: "run not active"}
 }
 
 // Approve resolves a pending manual gate. Returns false if nothing is awaiting.
@@ -186,7 +206,7 @@ func (s *Supervisor) ResumeAll(ctx context.Context) error {
 // caller decides whether that is fatal.
 func (s *Supervisor) resumeRun(ctx context.Context, rs core.RunState, f *flow.Flow) error {
 	s.resetIncompleteSteps(ctx, rs)
-	if err := s.engine.Provision(rs.ID, rs.Repo, rs.Base); err != nil {
+	if err := s.engine.Provision(ctx, rs.ID, rs.Repo, rs.Base); err != nil {
 		return fmt.Errorf("provision run: %w", err)
 	}
 	s.start(ctx, rs.ID, func(runCtx context.Context) error { return s.engine.Resume(runCtx, rs, f) })
@@ -278,7 +298,7 @@ func (s *Supervisor) Push(ctx context.Context, runID core.RunID, opts PushOpts) 
 	if branch == "" {
 		return PushResult{}, pushErr(http.StatusBadRequest, "step %q has no branch (not an isolated/committed step)", step.ID)
 	}
-	remoteURL, err := workspace.ResolveRemote(rs.Repo, opts.Remote)
+	remoteURL, err := workspace.ResolveRemote(ctx, rs.Repo, opts.Remote)
 	if err != nil {
 		return PushResult{}, pushErr(http.StatusBadRequest, "remote: %v", err)
 	}
@@ -290,7 +310,7 @@ func (s *Supervisor) Push(ctx context.Context, runID core.RunID, opts PushOpts) 
 	if base == "" || !dirHasGit(base) {
 		return PushResult{}, pushErr(http.StatusNotFound, "scratch repo for run %q not found (reclaimed?)", runID)
 	}
-	if err := workspace.PushBranch(base, remoteURL, branch, dest, opts.Force); err != nil {
+	if err := workspace.PushBranch(ctx, base, remoteURL, branch, dest, opts.Force); err != nil {
 		return PushResult{}, pushErr(http.StatusBadGateway, "%v", err)
 	}
 	return PushResult{Remote: remoteURL, Branch: dest, SourceBranch: branch, Commit: commit}, nil

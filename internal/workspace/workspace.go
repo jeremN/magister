@@ -4,6 +4,7 @@
 package workspace
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,16 +20,16 @@ type Manager struct {
 
 // TeardownRun is a no-op: the plain Manager allocates plain directories, which the
 // caller's run dir cleanup (or the OS temp dir) reclaims. GitManager does real teardown.
-func (m *Manager) TeardownRun(core.RunID) error { return nil }
+func (m *Manager) TeardownRun(context.Context, core.RunID) error { return nil }
 
 // Commit is a no-op: the plain Manager has no git backing, so steps stay path-only.
-func (m *Manager) Commit(core.RunID, *flow.Step, string) (string, string, error) {
+func (m *Manager) Commit(context.Context, core.RunID, *flow.Step, string) (string, string, error) {
 	return "", "", nil
 }
 
 // Provision is a no-op: the plain Manager has no git backing, so there is no repo
 // to clone. External-repo runs require the GitManager.
-func (m *Manager) Provision(core.RunID, string, string) error { return nil }
+func (m *Manager) Provision(context.Context, core.RunID, string, string) error { return nil }
 
 // BasePath returns the run's directory. The plain Manager has no git backing, so
 // this is informational; push only targets GitManager-backed external-repo runs.
@@ -39,8 +40,9 @@ func (m *Manager) BasePath(runID core.RunID) string {
 // Reclaim removes the run's scratch directory and reports whether a directory was
 // actually removed. Mirrors GitManager.Reclaim with the same safety guard and the
 // same idempotent (false, nil) for a missing dir; the plain Manager allocates plain
-// dirs under Root.
-func (m *Manager) Reclaim(runID core.RunID) (bool, error) {
+// dirs under Root. ctx is accepted for interface compliance; only filesystem ops are
+// performed (no git subprocess).
+func (m *Manager) Reclaim(_ context.Context, runID core.RunID) (bool, error) {
 	if !safeRunID(runID) {
 		return false, fmt.Errorf("refusing to reclaim unsafe run id %q", runID)
 	}

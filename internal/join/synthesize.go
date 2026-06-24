@@ -20,16 +20,16 @@ func (Synthesize) Join(ctx context.Context, s *flow.Step, inputs []core.Artifact
 	}
 	var cost float64
 	for _, br := range branches {
-		if _, err := gitCmd(workDir, "merge", "--no-edit", br); err == nil {
+		if _, err := gitCmd(ctx, workDir, "merge", "--no-edit", br); err == nil {
 			continue // clean merge auto-committed
 		}
-		conflicted := conflictedPaths(workDir)
+		conflicted := conflictedPaths(ctx, workDir)
 		if len(conflicted) == 0 {
 			return core.Result{}, fmt.Errorf("synthesize: merge %s failed without conflicts", br)
 		}
 		ares, aerr := run(ctx, s.Join.Agent, ResolveConflictPrompt(conflicted), workDir, inputs)
 		if aerr != nil {
-			_, _ = gitCmd(workDir, "merge", "--abort")
+			_, _ = gitCmd(ctx, workDir, "merge", "--abort")
 			return core.Result{}, fmt.Errorf("synthesize: arbiter failed: %w", aerr)
 		}
 		cost += ares.CostUSD
@@ -37,15 +37,16 @@ func (Synthesize) Join(ctx context.Context, s *flow.Step, inputs []core.Artifact
 		// concluding the merge. (conflictedPaths is index-state-based, so it can't
 		// recheck a working-tree resolution until `git add`; EnsureResolved stages
 		// then scans the staged tree.)
-		if err := EnsureResolved(workDir); err != nil {
-			_, _ = gitCmd(workDir, "merge", "--abort")
+		if err := EnsureResolved(ctx, workDir); err != nil {
+			_, _ = gitCmd(ctx, workDir, "merge", "--abort")
 			return core.Result{}, fmt.Errorf("synthesize: arbiter left conflicts in %v: %w", conflicted, err)
 		}
-		if _, err := gitCmd(workDir, "commit", "--no-edit"); err != nil {
+		if _, err := gitCmd(ctx, workDir, "commit", "--no-edit"); err != nil {
+			_, _ = gitCmd(ctx, workDir, "merge", "--abort")
 			return core.Result{}, fmt.Errorf("synthesize: commit after resolving %s: %w", br, err)
 		}
 	}
-	res, err := CommittedResult(workDir, s)
+	res, err := CommittedResult(ctx, workDir, s)
 	if err != nil {
 		return core.Result{}, err
 	}

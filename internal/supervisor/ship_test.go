@@ -27,7 +27,7 @@ func TestShipPushFailsSkipsPR(t *testing.T) {
 	// A running (not succeeded) external-repo run → Push 409 before any PR work.
 	if err := st.CreateRun(context.Background(), core.RunState{
 		ID: "r1", Repo: "/abs/proj", Status: core.RunRunning,
-		FlowYAML: "name: f\nsteps:\n  - id: a\n    agent: mock\n",
+		FlowYAML: "name: f\nsteps:\n  - id: a\n    agent: mock\n    prompt: p\n",
 	}); err != nil {
 		t.Fatal(err)
 	}

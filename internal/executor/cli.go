@@ -29,12 +29,12 @@ type CLISpec interface {
 // CLIAgent is a core.Executor that runs a coding-agent CLI in the step's WorkDir,
 // passes the prompt, parses cost+summary via Spec, and discovers changed files.
 type CLIAgent struct {
-	Bin      string                                        // e.g. "claude"
-	Model    string                                        // "opus" / "sonnet"
-	Spec     CLISpec                                       // ClaudeSpec{}
-	Env      []string                                      // nil ⇒ os.Environ() (carries ANTHROPIC_API_KEY)
-	Discover func(workDir string) ([]core.Artifact, error) // nil ⇒ discoverGit
-	Log      *slog.Logger                                  // nil ⇒ context logger (non-fatal discovery errors)
+	Bin      string                                                             // e.g. "claude"
+	Model    string                                                             // "opus" / "sonnet"
+	Spec     CLISpec                                                            // ClaudeSpec{}
+	Env      []string                                                           // nil ⇒ os.Environ() (carries ANTHROPIC_API_KEY)
+	Discover func(ctx context.Context, workDir string) ([]core.Artifact, error) // nil ⇒ discoverGit
+	Log      *slog.Logger                                                       // nil ⇒ context logger (non-fatal discovery errors)
 }
 
 var _ core.Executor = (*CLIAgent)(nil)
@@ -90,7 +90,7 @@ func (a *CLIAgent) Run(ctx context.Context, t core.Task) (core.Result, error) {
 	if discover == nil {
 		discover = discoverGit
 	}
-	arts, derr := discover(t.WorkDir)
+	arts, derr := discover(ctx, t.WorkDir)
 	if derr != nil {
 		a.logger(ctx).Warn("artifact discovery failed", "step", t.StepID, "err", derr)
 		arts = nil

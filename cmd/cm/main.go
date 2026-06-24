@@ -33,7 +33,11 @@ func dispatch(args []string, base string, out io.Writer) int {
 		fmt.Fprintln(out, "usage: cm <run|ls|get|watch|approve|reject|cancel|retry|push|pr|ship|gc|rm|loglevel> ...")
 		return 2
 	}
-	c := &client{base: base, http: &http.Client{Timeout: 0}}
+	c := &client{
+		base:      base,
+		http:      &http.Client{Timeout: 30 * time.Second},
+		watchHTTP: &http.Client{Timeout: 0},
+	}
 	switch args[0] {
 	case "run":
 		return c.run(args[1:], out)
@@ -86,8 +90,9 @@ func dispatch(args []string, base string, out io.Writer) int {
 }
 
 type client struct {
-	base string
-	http *http.Client
+	base      string
+	http      *http.Client // 30s timeout; used by all commands except watch
+	watchHTTP *http.Client // no timeout; used for SSE streams
 }
 
 func (c *client) run(args []string, out io.Writer) int {
@@ -154,7 +159,7 @@ func (c *client) run(args []string, out io.Writer) int {
 }
 
 func (c *client) watch(id string, out io.Writer) int {
-	resp, err := c.http.Get(c.base + "/v1/runs/" + id + "/events")
+	resp, err := c.watchHTTP.Get(c.base + "/v1/runs/" + id + "/events")
 	if err != nil {
 		fmt.Fprintln(out, "watch:", err)
 		return 1

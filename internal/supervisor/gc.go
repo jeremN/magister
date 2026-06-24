@@ -32,7 +32,7 @@ func reclaimErr(status int, format string, a ...any) *ReclaimError {
 // Shared by SweepScratch and ReclaimRun so the mark-on-success rule lives in one
 // place.
 func (s *Supervisor) reclaimOne(ctx context.Context, id core.RunID) (bool, error) {
-	removed, err := s.engine.ReclaimScratch(id)
+	removed, err := s.engine.ReclaimScratch(ctx, id)
 	if err != nil {
 		return false, err
 	}

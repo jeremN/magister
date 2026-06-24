@@ -50,7 +50,7 @@ func seedExtRun(t *testing.T, st core.Store, id core.RunID, repo string) {
 	t.Helper()
 	err := st.CreateRun(context.Background(), core.RunState{
 		ID: id, Name: "demo", Repo: repo, Status: core.RunSucceeded,
-		FlowYAML: "name: demo\nsteps:\n  - id: integrate\n    agent: mock\n",
+		FlowYAML: "name: demo\nsteps:\n  - id: integrate\n    agent: mock\n    prompt: p\n",
 		Steps: []core.StepState{{
 			RunID: id, StepID: "integrate", Status: core.StepSucceeded,
 			Artifacts: []core.Artifact{{StepID: "integrate", Branch: "step/integrate", Commit: "abcdef1234567"}},
@@ -121,7 +121,7 @@ func TestPRRejectsNonExternalRepo(t *testing.T) {
 	sup := newPRSup(t, st)
 	st.CreateRun(context.Background(), core.RunState{
 		ID: "r1", Status: core.RunSucceeded,
-		FlowYAML: "name: f\nsteps:\n  - id: a\n    agent: mock\n",
+		FlowYAML: "name: f\nsteps:\n  - id: a\n    agent: mock\n    prompt: p\n",
 	})
 	_, err := sup.PR(context.Background(), "r1", PROpts{})
 	if got := prErrStatus(t, err); got != http.StatusBadRequest {
@@ -134,7 +134,7 @@ func TestPRRejectsUnsucceededRun(t *testing.T) {
 	sup := newPRSup(t, st)
 	st.CreateRun(context.Background(), core.RunState{
 		ID: "r1", Repo: "/abs/proj", Status: core.RunRunning,
-		FlowYAML: "name: f\nsteps:\n  - id: a\n    agent: mock\n",
+		FlowYAML: "name: f\nsteps:\n  - id: a\n    agent: mock\n    prompt: p\n",
 	})
 	_, err := sup.PR(context.Background(), "r1", PROpts{})
 	if got := prErrStatus(t, err); got != http.StatusConflict {

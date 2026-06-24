@@ -33,6 +33,7 @@ func Validate(f *Flow) error {
 	}
 
 	for _, s := range f.Steps {
+		seen := make(map[string]bool, len(s.Needs))
 		for _, dep := range s.Needs {
 			if dep == s.ID {
 				return fmt.Errorf("step %q needs itself", s.ID)
@@ -40,12 +41,25 @@ func Validate(f *Flow) error {
 			if _, ok := byID[dep]; !ok {
 				return fmt.Errorf("step %q needs unknown step %q", s.ID, dep)
 			}
+			if seen[dep] {
+				return fmt.Errorf("step %q: duplicate needs entry %q", s.ID, dep)
+			}
+			seen[dep] = true
 		}
 		if s.Join == nil && s.Agent == "" {
 			return fmt.Errorf("step %q has neither an agent nor a join", s.ID)
 		}
 		if s.Join != nil && s.Agent != "" {
 			return fmt.Errorf("step %q has both an agent and a join (pick one)", s.ID)
+		}
+		if s.Agent != "" && s.Join == nil && s.Role == "" && s.Prompt == "" {
+			return fmt.Errorf("step %q: agent step needs a role or a prompt", s.ID)
+		}
+		switch s.Workspace {
+		case "", WSShared, WSIsolated:
+			// valid
+		default:
+			return fmt.Errorf("step %q: unknown workspace %q", s.ID, s.Workspace)
 		}
 		if err := validateGate(s); err != nil {
 			return err
@@ -55,6 +69,9 @@ func Validate(f *Flow) error {
 		}
 		if s.Retry != nil && s.Retry.Max < 1 {
 			return fmt.Errorf("step %q: retry.max must be >= 1, got %d", s.ID, s.Retry.Max)
+		}
+		if s.Retry != nil && s.Retry.Backoff < 0 {
+			return fmt.Errorf("step %q: retry.backoff must be >= 0", s.ID)
 		}
 		if s.Timeout < 0 {
 			return fmt.Errorf("step %q: timeout must be >= 0", s.ID)

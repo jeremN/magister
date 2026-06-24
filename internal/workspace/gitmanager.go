@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -71,7 +72,9 @@ func (m *GitManager) runLock(id core.RunID) *sync.Mutex {
 // Provision records a run's source repo + pinned base SHA before its first step.
 // Empty repo ⇒ synthetic empty base. Re-provisioning a run overwrites its spec
 // (last write wins) — intended, so a resume can re-record the same run's repo/base.
-func (m *GitManager) Provision(runID core.RunID, repo, base string) error {
+// ctx is accepted for interface compliance and future use; Provision itself does no
+// git I/O (the clone happens lazily in For/ensureRepo).
+func (m *GitManager) Provision(_ context.Context, runID core.RunID, repo, base string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.specs == nil {
@@ -111,7 +114,9 @@ func safeRunID(id core.RunID) bool {
 // store-driven janitor, which keeps re-selecting an already-reclaimed terminal run,
 // does no real work and reports nothing on subsequent sweeps. Refuses an unsafe
 // runID so an empty/".." id can never RemoveAll the runs root.
-func (m *GitManager) Reclaim(runID core.RunID) (bool, error) {
+// ctx is accepted for interface compliance; Reclaim performs only local filesystem
+// operations (no git subprocess), so cancellation is not applicable here.
+func (m *GitManager) Reclaim(_ context.Context, runID core.RunID) (bool, error) {
 	if !safeRunID(runID) {
 		return false, fmt.Errorf("refusing to reclaim unsafe run id %q", runID)
 	}
@@ -135,11 +140,12 @@ func (m *GitManager) Reclaim(runID core.RunID) (bool, error) {
 func (m *GitManager) BasePath(runID core.RunID) string { return m.baseDir(runID) }
 
 // run executes git in dir and returns combined output. Args are orchestrator-
-// controlled (run/step IDs, fixed subcommands); no shell is involved.
-func (m *GitManager) run(dir string, args ...string) ([]byte, error) {
+// controlled (run/step IDs, fixed subcommands); no shell is involved. ctx allows
+// the step/run context to cancel a hung git subprocess (e.g. a stalled clone/push).
+func (m *GitManager) run(ctx context.Context, dir string, args ...string) ([]byte, error) {
 	// #nosec G204 -- git with orchestrator-supplied args (validated run/step IDs),
 	// invoked without a shell. This is the intended capability, not user input.
-	cmd := exec.Command("git", args...)
+	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -154,31 +160,31 @@ func (m *GitManager) run(dir string, args ...string) ([]byte, error) {
 // (resume), and a crash between `git init` and the first commit (unborn HEAD) is
 // healed by re-issuing the empty commit. A clone is born with a real HEAD, so the
 // heal applies only to the empty-base path.
-func (m *GitManager) ensureRepo(baseDir string, spec repoSpec) error {
+func (m *GitManager) ensureRepo(ctx context.Context, baseDir string, spec repoSpec) error {
 	if _, err := os.Stat(filepath.Join(baseDir, ".git")); err != nil {
 		if err := os.MkdirAll(baseDir, 0o755); err != nil {
 			return err
 		}
 		if spec.repo != "" {
-			return m.cloneBase(baseDir, spec)
+			return m.cloneBase(ctx, baseDir, spec)
 		}
-		if _, err := m.run(baseDir, "init"); err != nil {
+		if _, err := m.run(ctx, baseDir, "init"); err != nil {
 			return err
 		}
-		if _, err := m.run(baseDir, "config", "user.name", m.name()); err != nil {
+		if _, err := m.run(ctx, baseDir, "config", "user.name", m.name()); err != nil {
 			return err
 		}
-		if _, err := m.run(baseDir, "config", "user.email", m.email()); err != nil {
+		if _, err := m.run(ctx, baseDir, "config", "user.email", m.email()); err != nil {
 			return err
 		}
 	}
 	if spec.repo != "" {
 		return nil // a clone is born with a real HEAD; nothing to heal
 	}
-	if _, err := m.run(baseDir, "rev-parse", "--verify", "-q", "HEAD"); err == nil {
+	if _, err := m.run(ctx, baseDir, "rev-parse", "--verify", "-q", "HEAD"); err == nil {
 		return nil // base commit already present
 	}
-	if _, err := m.run(baseDir,
+	if _, err := m.run(ctx, baseDir,
 		"-c", "user.name="+m.name(), "-c", "user.email="+m.email(),
 		"commit", "--allow-empty", "-m", "base"); err != nil {
 		return err
@@ -198,24 +204,24 @@ func (m *GitManager) ensureRepo(baseDir string, spec repoSpec) error {
 //     "-"-leading repo cannot smuggle a flag.
 //   - protocol.ext.allow=never disables the ext:: transport (a remote-code vector
 //     if repo were attacker-controlled); local file clones are unaffected.
-func (m *GitManager) cloneBase(baseDir string, spec repoSpec) error {
+func (m *GitManager) cloneBase(ctx context.Context, baseDir string, spec repoSpec) error {
 	if !isHexSHA(spec.base) {
 		return fmt.Errorf("invalid base commit %q: want a hex sha", spec.base)
 	}
-	if _, err := m.run("", "-c", "protocol.ext.allow=never", "clone", "--", spec.repo, baseDir); err != nil {
+	if _, err := m.run(ctx, "", "-c", "protocol.ext.allow=never", "clone", "--", spec.repo, baseDir); err != nil {
 		return err
 	}
-	if _, err := m.run(baseDir, "checkout", "--detach", spec.base); err != nil {
+	if _, err := m.run(ctx, baseDir, "checkout", "--detach", spec.base); err != nil {
 		// A clone that can't reach its pinned base must not be left half-provisioned:
 		// the .git dir would make a later ensureRepo treat it as ready and silently
 		// fork from the wrong commit. Remove it so the next attempt re-clones.
 		_ = os.RemoveAll(baseDir)
 		return err
 	}
-	if _, err := m.run(baseDir, "config", "user.name", m.name()); err != nil {
+	if _, err := m.run(ctx, baseDir, "config", "user.name", m.name()); err != nil {
 		return err
 	}
-	if _, err := m.run(baseDir, "config", "user.email", m.email()); err != nil {
+	if _, err := m.run(ctx, baseDir, "config", "user.email", m.email()); err != nil {
 		return err
 	}
 	return nil
@@ -238,18 +244,18 @@ func isHexSHA(s string) bool {
 // freshWorktree (re-)creates a clean worktree at wt on branch step/<stepID>. Any
 // stale worktree/branch (e.g. left by a crashed run) is removed first, so this is
 // safe to call on resume.
-func (m *GitManager) freshWorktree(base, wt, stepID string) error {
+func (m *GitManager) freshWorktree(ctx context.Context, base, wt, stepID string) error {
 	branch := "step/" + stepID
 	if _, err := os.Stat(wt); err == nil {
-		_, _ = m.run(base, "worktree", "remove", "--force", wt)
+		_, _ = m.run(ctx, base, "worktree", "remove", "--force", wt)
 		_ = os.RemoveAll(wt) // clear the path even if it wasn't a registered worktree
 	}
-	_, _ = m.run(base, "worktree", "prune")
-	_, _ = m.run(base, "branch", "-D", branch) // best-effort; no-op if absent
+	_, _ = m.run(ctx, base, "worktree", "prune")
+	_, _ = m.run(ctx, base, "branch", "-D", branch) // best-effort; no-op if absent
 	if err := os.MkdirAll(filepath.Dir(wt), 0o755); err != nil {
 		return err
 	}
-	_, err := m.run(base, "worktree", "add", wt, "-b", branch, "HEAD")
+	_, err := m.run(ctx, base, "worktree", "add", wt, "-b", branch, "HEAD")
 	return err
 }
 
@@ -258,8 +264,9 @@ func (m *GitManager) For(runID core.RunID, s *flow.Step) (string, func() error, 
 	lock.Lock()
 	defer lock.Unlock()
 
+	ctx := context.Background()
 	base := m.baseDir(runID)
-	if err := m.ensureRepo(base, m.specFor(runID)); err != nil {
+	if err := m.ensureRepo(ctx, base, m.specFor(runID)); err != nil {
 		return "", nil, err
 	}
 	noop := func() error { return nil } // worktrees outlive the step; TeardownRun reclaims them
@@ -268,7 +275,7 @@ func (m *GitManager) For(runID core.RunID, s *flow.Step) (string, func() error, 
 		return base, noop, nil
 	}
 	wt := filepath.Join(m.wtDir(runID), s.ID)
-	if err := m.freshWorktree(base, wt, s.ID); err != nil {
+	if err := m.freshWorktree(ctx, base, wt, s.ID); err != nil {
 		return "", nil, err
 	}
 	return wt, noop, nil
@@ -278,18 +285,18 @@ func (m *GitManager) For(runID core.RunID, s *flow.Step) (string, func() error, 
 // returning the branch name and the new commit sha. --allow-empty so a step that
 // wrote nothing still advances its branch deterministically. Serialised by the
 // run lock, like For/TeardownRun. Identity comes from the repo config ensureRepo set.
-func (m *GitManager) Commit(runID core.RunID, s *flow.Step, workDir string) (string, string, error) {
+func (m *GitManager) Commit(ctx context.Context, runID core.RunID, s *flow.Step, workDir string) (string, string, error) {
 	lock := m.runLock(runID)
 	lock.Lock()
 	defer lock.Unlock()
 
-	if _, err := m.run(workDir, "add", "-A"); err != nil {
+	if _, err := m.run(ctx, workDir, "add", "-A"); err != nil {
 		return "", "", err
 	}
-	if _, err := m.run(workDir, "commit", "--allow-empty", "-m", "step/"+s.ID); err != nil {
+	if _, err := m.run(ctx, workDir, "commit", "--allow-empty", "-m", "step/"+s.ID); err != nil {
 		return "", "", err
 	}
-	out, err := m.run(workDir, "rev-parse", "HEAD")
+	out, err := m.run(ctx, workDir, "rev-parse", "HEAD")
 	if err != nil {
 		return "", "", err
 	}
@@ -298,7 +305,7 @@ func (m *GitManager) Commit(runID core.RunID, s *flow.Step, workDir string) (str
 
 // TeardownRun removes the run's isolated worktrees (the base repo persists). Best-
 // effort and idempotent: a no-op if the run never set up a repo.
-func (m *GitManager) TeardownRun(runID core.RunID) error {
+func (m *GitManager) TeardownRun(ctx context.Context, runID core.RunID) error {
 	lock := m.runLock(runID)
 	lock.Lock()
 	defer lock.Unlock()
@@ -317,10 +324,10 @@ func (m *GitManager) TeardownRun(runID core.RunID) error {
 	var firstErr error
 	for _, e := range entries {
 		wt := filepath.Join(m.wtDir(runID), e.Name())
-		if _, err := m.run(base, "worktree", "remove", "--force", wt); err != nil && firstErr == nil {
+		if _, err := m.run(ctx, base, "worktree", "remove", "--force", wt); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
-	_, _ = m.run(base, "worktree", "prune")
+	_, _ = m.run(ctx, base, "worktree", "prune")
 	return firstErr
 }

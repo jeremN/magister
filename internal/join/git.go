@@ -2,6 +2,7 @@ package join
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -13,10 +14,10 @@ import (
 
 // gitCmd runs git in workDir and returns combined output. Args are orchestrator-
 // controlled (fixed subcommands, validated branch names); no shell is involved.
-// Mirrors executor.discoverGit's direct-exec pattern.
-func gitCmd(workDir string, args ...string) ([]byte, error) {
+// Mirrors executor.discoverGit's direct-exec pattern. ctx cancels the subprocess.
+func gitCmd(ctx context.Context, workDir string, args ...string) ([]byte, error) {
 	// #nosec G204 -- fixed git subcommands in an operator-controlled worktree; no shell.
-	cmd := exec.Command("git", args...)
+	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = workDir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -69,8 +70,8 @@ func upstreamBranches(inputs []core.Artifact) []string {
 // A git error (an unexpected worktree state) is treated as "no conflicts": this
 // helper is only consulted after a merge that already exited non-zero, so the
 // caller's own error carries the real failure.
-func conflictedPaths(workDir string) []string {
-	out, err := gitCmd(workDir, "diff", "--name-only", "-z", "--diff-filter=U")
+func conflictedPaths(ctx context.Context, workDir string) []string {
+	out, err := gitCmd(ctx, workDir, "diff", "--name-only", "-z", "--diff-filter=U")
 	if err != nil {
 		return nil
 	}
@@ -82,11 +83,11 @@ func conflictedPaths(workDir string) []string {
 // whitespace is not misread as a marker — only genuine <<<<<<< / ======= / >>>>>>>
 // lines fail. Used after an arbiter resolves a conflict in place, before the merge
 // is committed; an error means the arbiter left the merge unresolved.
-func EnsureResolved(workDir string) error {
-	if _, err := gitCmd(workDir, "add", "-A"); err != nil {
+func EnsureResolved(ctx context.Context, workDir string) error {
+	if _, err := gitCmd(ctx, workDir, "add", "-A"); err != nil {
 		return err
 	}
-	if _, err := gitCmd(workDir,
+	if _, err := gitCmd(ctx, workDir,
 		"-c", "core.whitespace=-trailing-space,-blank-at-eol,-space-before-tab,-blank-at-eof",
 		"diff", "--cached", "--check"); err != nil {
 		return fmt.Errorf("unresolved conflict markers remain")
@@ -98,18 +99,18 @@ func EnsureResolved(workDir string) error {
 // (the worktree's current branch), HEAD sha, and every tracked file as an
 // artifact. Used by merge's clean path, synthesize, and the engine's escalate-
 // finalize so all three enumerate artifacts identically.
-func CommittedResult(workDir string, s *flow.Step) (core.Result, error) {
-	branchOut, err := gitCmd(workDir, "rev-parse", "--abbrev-ref", "HEAD")
+func CommittedResult(ctx context.Context, workDir string, s *flow.Step) (core.Result, error) {
+	branchOut, err := gitCmd(ctx, workDir, "rev-parse", "--abbrev-ref", "HEAD")
 	if err != nil {
 		return core.Result{}, err
 	}
 	branch := strings.TrimSpace(string(branchOut))
-	shaOut, err := gitCmd(workDir, "rev-parse", "HEAD")
+	shaOut, err := gitCmd(ctx, workDir, "rev-parse", "HEAD")
 	if err != nil {
 		return core.Result{}, err
 	}
 	sha := strings.TrimSpace(string(shaOut))
-	filesOut, err := gitCmd(workDir, "ls-files", "-z")
+	filesOut, err := gitCmd(ctx, workDir, "ls-files", "-z")
 	if err != nil {
 		return core.Result{}, err
 	}

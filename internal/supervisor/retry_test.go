@@ -143,8 +143,8 @@ func TestRetryResumesSkippingSucceeded(t *testing.T) {
 	// Step a always passes; step b's gate passes only once `flag` exists.
 	flag := filepath.Join(t.TempDir(), "ok")
 	yaml := "name: f\nsteps:\n" +
-		"  - id: a\n    agent: mock\n    workspace: isolated\n    gate: { policy: auto, verifier: { command: \"true\" } }\n" +
-		"  - id: b\n    agent: mock\n    workspace: isolated\n    needs: [a]\n    gate: { policy: auto, verifier: { command: \"test -f " + flag + "\" } }\n"
+		"  - id: a\n    agent: mock\n    prompt: p\n    workspace: isolated\n    gate: { policy: auto, verifier: { command: \"true\" } }\n" +
+		"  - id: b\n    agent: mock\n    prompt: p\n    workspace: isolated\n    needs: [a]\n    gate: { policy: auto, verifier: { command: \"test -f " + flag + "\" } }\n"
 
 	id, err := sup.Submit(ctx, mustFlow(t, yaml), yaml, "", "")
 	if err != nil {
@@ -193,7 +193,7 @@ func TestRetryResumesCanceledRun(t *testing.T) {
 	sup := New(testEngine(t, st, reg, gm), st, reg)
 	t.Cleanup(func() { sup.Shutdown(time.Second) })
 
-	yaml := "name: f\nsteps:\n  - id: a\n    agent: mock\n    gate: { policy: manual }\n"
+	yaml := "name: f\nsteps:\n  - id: a\n    agent: mock\n    prompt: p\n    gate: { policy: manual }\n"
 	id, err := sup.Submit(ctx, mustFlow(t, yaml), yaml, "", "")
 	if err != nil {
 		t.Fatal(err)
@@ -205,7 +205,7 @@ func TestRetryResumesCanceledRun(t *testing.T) {
 		rs, _ := st.GetRun(ctx, id)
 		return stepStatus(rs, "a") == core.StepAwaitingGate
 	})
-	waitFor(t, func() bool { return sup.Cancel(id) })
+	waitFor(t, func() bool { return sup.Cancel(ctx, id) == nil })
 	waitForStatus(t, st, id, core.RunCanceled)
 
 	got, err := sup.Retry(ctx, id)
@@ -241,7 +241,7 @@ func TestRetryConcurrentSameRunStartsOnce(t *testing.T) {
 	// throughout the race so the loser hits the active-check path. (No isolated/commit
 	// step on purpose: a committing engine goroutine would race the GetRun poll below in
 	// the Mem store, an unrelated pre-existing concern; mirrors TestRetryResumesCanceledRun.)
-	yaml := "name: f\nsteps:\n  - id: a\n    agent: mock\n    gate: { policy: manual }\n"
+	yaml := "name: f\nsteps:\n  - id: a\n    agent: mock\n    prompt: p\n    gate: { policy: manual }\n"
 
 	id, err := sup.Submit(ctx, mustFlow(t, yaml), yaml, "", "")
 	if err != nil {
@@ -254,7 +254,7 @@ func TestRetryConcurrentSameRunStartsOnce(t *testing.T) {
 		rs, _ := st.GetRun(ctx, id)
 		return stepStatus(rs, "a") == core.StepAwaitingGate
 	})
-	waitFor(t, func() bool { return sup.Cancel(id) })
+	waitFor(t, func() bool { return sup.Cancel(ctx, id) == nil })
 	waitForStatus(t, st, id, core.RunCanceled)
 
 	// Fire two concurrent retries of the same run id.

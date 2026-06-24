@@ -72,6 +72,30 @@ func TestRunScratchJanitorDisabledReturns(t *testing.T) {
 	}
 }
 
+// TestRunScratchJanitorReturnsPromptlyOnCancel verifies that runScratchJanitor exits
+// promptly when its context is canceled. This exercises the pre-canceled ctx path
+// (ttl=0, disabled) to confirm the function returns without blocking — the property
+// required for the join in main (stopJanitor + <-janitorDone before st.Close()).
+// The active-loop cancel path (ttl>0) is verified by reading the code: the for-select
+// has an explicit <-ctx.Done() return arm; runScratchJanitor takes a concrete
+// *supervisor.Supervisor so a nil-safe unit test requires ttl=0.
+func TestRunScratchJanitorReturnsPromptlyOnCancel(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // pre-cancel so any ctx-aware path exits immediately
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runScratchJanitor(ctx, nil, 0, time.Hour, log)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("janitor did not return after ctx cancel")
+	}
+}
+
 func TestAgentsRegistry(t *testing.T) {
 	m := agents()
 	if _, ok := m["mock"]; !ok {

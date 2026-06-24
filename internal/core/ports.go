@@ -60,25 +60,29 @@ type Workspace interface {
 	// Commit records the step's worktree as a commit on its branch and returns the
 	// branch name and commit sha. A no-op (returns "", "", nil) for workspaces with
 	// no git backing (the plain Manager) and acceptable to call for any step; the
-	// engine only calls it for committed isolated steps.
-	Commit(runID RunID, s *flow.Step, workDir string) (branch, commit string, err error)
+	// engine only calls it for committed isolated steps. ctx is used to cancel the
+	// underlying git subprocess.
+	Commit(ctx context.Context, runID RunID, s *flow.Step, workDir string) (branch, commit string, err error)
 	// Provision records the run's source repo + pinned base commit SHA before any
 	// step runs. An empty repo selects the synthetic empty-base scratch repo
 	// (default; today's behavior). A no-op for the plain Manager (no git backing).
-	Provision(runID RunID, repo, base string) error
+	// ctx is used to cancel any git subprocess (e.g. clone) initiated eagerly.
+	Provision(ctx context.Context, runID RunID, repo, base string) error
 	// BasePath returns the on-disk path of a run's per-run base repo (for an
 	// external-repo run, the scratch clone). Safe to call any time; the path may not
 	// exist yet. Post-run delivery (push) reads the result branch from here.
 	BasePath(runID RunID) string
 	// TeardownRun removes the run's isolated worktrees (the base repo persists). It
 	// is best-effort, idempotent, and a no-op for a run with no worktrees.
-	TeardownRun(runID RunID) error
+	// ctx is used to cancel any git subprocess.
+	TeardownRun(ctx context.Context, runID RunID) error
 	// Reclaim removes the run's entire scratch directory (base repo + worktrees) and
 	// reports whether a directory was actually removed. Best-effort and idempotent: a
 	// missing directory returns (false, nil). The scratch janitor calls it once a run
 	// is terminal and past its retention TTL; the removed bool lets a store-driven
 	// sweep count (and log) only real reclaims, not re-selections of already-cleaned runs.
-	Reclaim(runID RunID) (removed bool, err error)
+	// ctx is used to cancel any git subprocess.
+	Reclaim(ctx context.Context, runID RunID) (removed bool, err error)
 }
 
 // Publisher receives engine events for live observers. Lossy by contract.

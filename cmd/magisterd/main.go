@@ -129,15 +129,23 @@ func run(args []string, env func(string) string, stopCh <-chan struct{}, onListe
 	}
 
 	janitorCtx, stopJanitor := context.WithCancel(context.Background())
-	defer stopJanitor()
-	go runScratchJanitor(janitorCtx, sup, cfg.ScratchTTL, cfg.ScratchSweepInterval, log)
+	janitorDone := make(chan struct{})
+	go func() {
+		defer close(janitorDone)
+		runScratchJanitor(janitorCtx, sup, cfg.ScratchTTL, cfg.ScratchSweepInterval, log)
+	}()
+	// Ensure janitor goroutine exits before st.Close() fires (deferred above).
+	// This defer runs after the explicit stopJanitor()/<-janitorDone in the normal
+	// shutdown path (idempotent: cancel is a no-op and the channel is already closed).
+	defer func() { stopJanitor(); <-janitorDone }()
 
 	srv := &api.Server{Sup: sup, Store: st, Bus: bus, Log: log, ScratchRoot: runsRoot, Metrics: mx, LogLevel: lvlVar}
 	httpSrv := &http.Server{
-		Handler:      srv.Router(cfg.BearerToken),
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 0, // SSE streams are long-lived
-		IdleTimeout:  60 * time.Second,
+		Handler:           srv.Router(cfg.BearerToken),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      0, // SSE streams are long-lived
+		IdleTimeout:       60 * time.Second,
 	}
 
 	ln, err := net.Listen("tcp", cfg.Addr)
@@ -164,6 +172,8 @@ func run(args []string, env func(string) string, stopCh <-chan struct{}, onListe
 	}
 
 	log.Info("shutting down")
+	stopJanitor()         // cancel janitor ctx
+	<-janitorDone         // wait for goroutine to exit before st.Close() fires
 	srv.SetDraining(true) // /readyz → 503 so load balancers stop routing
 	if cfg.ShutdownDrain > 0 {
 		log.Info("draining", "grace", cfg.ShutdownDrain)

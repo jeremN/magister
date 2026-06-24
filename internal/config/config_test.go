@@ -170,3 +170,44 @@ func TestLogLevelFlagWinsOverEnv(t *testing.T) {
 		t.Errorf("explicit flag should win over env: got %q, want info", c.LogLevel)
 	}
 }
+
+func TestOTelEndpointEnvAppliedWhenFlagAbsent(t *testing.T) {
+	env := func(k string) string {
+		if k == "OTEL_EXPORTER_OTLP_ENDPOINT" {
+			return "http://collector:4318"
+		}
+		return ""
+	}
+	c := Parse(nil, env)
+	if c.OTelEndpoint != "http://collector:4318" {
+		t.Errorf("OTelEndpoint from env = %q, want http://collector:4318", c.OTelEndpoint)
+	}
+}
+
+func TestOTelEndpointFlagWinsOverEnv(t *testing.T) {
+	env := func(k string) string {
+		if k == "OTEL_EXPORTER_OTLP_ENDPOINT" {
+			return "http://from-env:4318"
+		}
+		return ""
+	}
+	// explicit -otel-endpoint flag must win over the env var
+	c := Parse([]string{"-otel-endpoint", "http://from-flag:4318"}, env)
+	if c.OTelEndpoint != "http://from-flag:4318" {
+		t.Errorf("explicit flag should win over env: got %q, want http://from-flag:4318", c.OTelEndpoint)
+	}
+}
+
+func TestOTelEndpointExplicitEmptyFlagWinsOverEnv(t *testing.T) {
+	env := func(k string) string {
+		if k == "OTEL_EXPORTER_OTLP_ENDPOINT" {
+			return "http://from-env:4318"
+		}
+		return ""
+	}
+	// an explicit -otel-endpoint "" (empty string) must suppress the env var
+	c := Parse([]string{"-otel-endpoint", ""}, env)
+	if c.OTelEndpoint != "" {
+		t.Errorf("explicit empty flag should win over env: got %q, want empty", c.OTelEndpoint)
+	}
+}

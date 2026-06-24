@@ -54,7 +54,7 @@ func testServer(t *testing.T) (*httptest.Server, *supervisor.Supervisor, core.St
 	return hs, sup, st
 }
 
-const oneStepFlow = "name: f\nsteps:\n  - id: a\n    agent: mock\n    gate: { policy: auto, verifier: { command: \"true\" } }\n"
+const oneStepFlow = "name: f\nsteps:\n  - id: a\n    agent: mock\n    prompt: p\n    gate: { policy: auto, verifier: { command: \"true\" } }\n"
 
 func TestPostRunCreatesAndCompletes(t *testing.T) {
 	hs, _, st := testServer(t)
@@ -121,7 +121,7 @@ func TestGetUnknownRun404(t *testing.T) {
 
 func TestApproveReleasesManualGate(t *testing.T) {
 	hs, _, st := testServer(t)
-	manualFlow := "name: f\nsteps:\n  - id: a\n    agent: mock\n    gate: { policy: manual }\n"
+	manualFlow := "name: f\nsteps:\n  - id: a\n    agent: mock\n    prompt: p\n    gate: { policy: manual }\n"
 	resp, _ := http.Post(hs.URL+"/v1/runs", "application/x-yaml", bytes.NewBufferString(manualFlow))
 	var rr runResponse
 	json.NewDecoder(resp.Body).Decode(&rr)
@@ -371,7 +371,7 @@ func TestPushEndpointNonExternalRepo400(t *testing.T) {
 	hs, _, st := testServer(t)
 	st.CreateRun(context.Background(), core.RunState{
 		ID: "r1", Status: core.RunSucceeded,
-		FlowYAML: "name: f\nsteps:\n  - id: a\n    agent: mock\n",
+		FlowYAML: "name: f\nsteps:\n  - id: a\n    agent: mock\n    prompt: p\n",
 	})
 	resp, err := http.Post(hs.URL+"/v1/runs/r1/push", "application/json", nil)
 	if err != nil {
@@ -387,7 +387,7 @@ func TestPushEndpointNotSucceeded409(t *testing.T) {
 	hs, _, st := testServer(t)
 	st.CreateRun(context.Background(), core.RunState{
 		ID: "r1", Repo: "/abs/proj", Status: core.RunPending,
-		FlowYAML: "name: f\nsteps:\n  - id: a\n    agent: mock\n",
+		FlowYAML: "name: f\nsteps:\n  - id: a\n    agent: mock\n    prompt: p\n",
 	})
 	resp, err := http.Post(hs.URL+"/v1/runs/r1/push", "application/json", nil)
 	if err != nil {
@@ -416,10 +416,12 @@ concurrency: 2
 steps:
   - id: build-api
     agent: mock
+    prompt: p
     workspace: isolated
     gate: { policy: auto, verifier: { command: "true" } }
   - id: build-ui
     agent: mock
+    prompt: p
     workspace: isolated
     gate: { policy: auto, verifier: { command: "true" } }
   - id: integrate
@@ -505,7 +507,7 @@ func TestPREndpointOpensPR(t *testing.T) {
 	t.Setenv("FAKE_GH_PR_URL", "https://github.com/o/r/pull/5")
 	st.CreateRun(context.Background(), core.RunState{
 		ID: "r1", Name: "demo", Repo: src, Status: core.RunSucceeded,
-		FlowYAML: "name: demo\nsteps:\n  - id: integrate\n    agent: mock\n",
+		FlowYAML: "name: demo\nsteps:\n  - id: integrate\n    agent: mock\n    prompt: p\n",
 		Steps: []core.StepState{{
 			RunID: "r1", StepID: "integrate", Status: core.StepSucceeded,
 			Artifacts: []core.Artifact{{StepID: "integrate", Branch: "step/integrate", Commit: "abc"}},
@@ -561,7 +563,7 @@ func TestShipEndpointNonExternal400(t *testing.T) {
 	hs, _, st := testServer(t)
 	st.CreateRun(context.Background(), core.RunState{
 		ID: "r1", Status: core.RunSucceeded,
-		FlowYAML: "name: f\nsteps:\n  - id: a\n    agent: mock\n",
+		FlowYAML: "name: f\nsteps:\n  - id: a\n    agent: mock\n    prompt: p\n",
 	})
 	resp, err := http.Post(hs.URL+"/v1/runs/r1/ship", "application/json", strings.NewReader(`{}`))
 	if err != nil {
@@ -635,7 +637,7 @@ func TestPREndpointOpensCrossForkPR(t *testing.T) {
 	t.Setenv("FAKE_GH_PR_URL", "https://github.com/o/r/pull/9")
 	st.CreateRun(context.Background(), core.RunState{
 		ID: "r1", Name: "demo", Repo: src, Status: core.RunSucceeded,
-		FlowYAML: "name: demo\nsteps:\n  - id: integrate\n    agent: mock\n",
+		FlowYAML: "name: demo\nsteps:\n  - id: integrate\n    agent: mock\n    prompt: p\n",
 		Steps: []core.StepState{{
 			RunID: "r1", StepID: "integrate", Status: core.StepSucceeded,
 			Artifacts: []core.Artifact{{StepID: "integrate", Branch: "step/integrate", Commit: "abc"}},

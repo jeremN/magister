@@ -84,7 +84,7 @@ func TestCancelTerminalRun409(t *testing.T) {
 func TestCancelActiveRun202(t *testing.T) {
 	hs, _, st := testServer(t)
 	// Post a flow with a slow mock step so the run stays active long enough to cancel.
-	manualFlow := "name: f\nsteps:\n  - id: a\n    agent: mock\n    gate: { policy: manual }\n"
+	manualFlow := "name: f\nsteps:\n  - id: a\n    agent: mock\n    prompt: p\n    gate: { policy: manual }\n"
 	resp, err := http.Post(hs.URL+"/v1/runs", "application/x-yaml", strings.NewReader(manualFlow))
 	if err != nil {
 		t.Fatal(err)

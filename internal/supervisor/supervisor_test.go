@@ -184,7 +184,7 @@ func TestResumeAllContinuesPastCorruptFlow(t *testing.T) {
 	if err := st.CreateRun(ctx, core.RunState{ID: "r1", Name: "bad", FlowYAML: "::: not yaml :::", Status: core.RunRunning}); err != nil {
 		t.Fatal(err)
 	}
-	const good = "name: f\nsteps:\n  - id: a\n    agent: mock\n    gate: { policy: manual }\n"
+	const good = "name: f\nsteps:\n  - id: a\n    agent: mock\n    prompt: p\n    gate: { policy: manual }\n"
 	if err := st.CreateRun(ctx, core.RunState{ID: "r2", Name: "f", FlowYAML: good, Status: core.RunRunning}); err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +214,7 @@ func (p *provisionSpy) Provision(_ context.Context, id core.RunID, repo, base st
 }
 
 // autoStepYAML is a one-step flow with an auto gate, so the run completes without approval.
-const autoStepYAML = "name: f\nsteps:\n  - id: a\n    agent: mock\n    gate: { policy: auto, verifier: { command: \"true\" } }\n"
+const autoStepYAML = "name: f\nsteps:\n  - id: a\n    agent: mock\n    prompt: p\n    gate: { policy: auto, verifier: { command: \"true\" } }\n"
 
 func TestSubmitProvisionsAndPersistsRepoBase(t *testing.T) {
 	st := store.NewMem()

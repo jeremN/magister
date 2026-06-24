@@ -77,10 +77,12 @@ concurrency: 2
 steps:
   - id: build-api
     agent: mock
+    prompt: p
     workspace: isolated
     gate: { policy: auto, verifier: { command: "true" } }
   - id: build-ui
     agent: mock
+    prompt: p
     workspace: isolated
     gate: { policy: auto, verifier: { command: "true" } }
   - id: integrate
@@ -144,7 +146,7 @@ func TestPushRejectsNonExternalRepoRun(t *testing.T) {
 	sup := New(testEngine(t, st, reg, &workspace.Manager{Root: t.TempDir()}), st, reg)
 	st.CreateRun(context.Background(), core.RunState{
 		ID: "r1", Status: core.RunSucceeded,
-		FlowYAML: "name: f\nsteps:\n  - id: a\n    agent: mock\n",
+		FlowYAML: "name: f\nsteps:\n  - id: a\n    agent: mock\n    prompt: p\n",
 	})
 	_, err := sup.Push(context.Background(), "r1", PushOpts{})
 	if got := pushErrStatus(t, err); got != http.StatusBadRequest {
@@ -158,7 +160,7 @@ func TestPushRejectsUnsucceededRun(t *testing.T) {
 	sup := New(testEngine(t, st, reg, &workspace.Manager{Root: t.TempDir()}), st, reg)
 	st.CreateRun(context.Background(), core.RunState{
 		ID: "r1", Repo: "/abs/proj", Status: core.RunRunning,
-		FlowYAML: "name: f\nsteps:\n  - id: a\n    agent: mock\n",
+		FlowYAML: "name: f\nsteps:\n  - id: a\n    agent: mock\n    prompt: p\n",
 	})
 	_, err := sup.Push(context.Background(), "r1", PushOpts{})
 	if got := pushErrStatus(t, err); got != http.StatusConflict {
@@ -172,7 +174,7 @@ func TestPushAmbiguousTerminal(t *testing.T) {
 	sup := New(testEngine(t, st, reg, &workspace.Manager{Root: t.TempDir()}), st, reg)
 	st.CreateRun(context.Background(), core.RunState{
 		ID: "r1", Repo: "/abs/proj", Status: core.RunSucceeded,
-		FlowYAML: "name: f\nsteps:\n  - id: a\n    agent: mock\n  - id: b\n    agent: mock\n",
+		FlowYAML: "name: f\nsteps:\n  - id: a\n    agent: mock\n    prompt: p\n  - id: b\n    agent: mock\n    prompt: p\n",
 	})
 	_, err := sup.Push(context.Background(), "r1", PushOpts{})
 	if got := pushErrStatus(t, err); got != http.StatusBadRequest {
@@ -198,7 +200,7 @@ func TestPushNoBranch(t *testing.T) {
 	sup := New(testEngine(t, st, reg, &workspace.Manager{Root: t.TempDir()}), st, reg)
 	st.CreateRun(context.Background(), core.RunState{
 		ID: "r1", Repo: "/abs/proj", Status: core.RunSucceeded,
-		FlowYAML: "name: f\nsteps:\n  - id: a\n    agent: mock\n",
+		FlowYAML: "name: f\nsteps:\n  - id: a\n    agent: mock\n    prompt: p\n",
 		Steps:    []core.StepState{{StepID: "a", Status: core.StepSucceeded}}, // no artifacts → no branch
 	})
 	_, err := sup.Push(context.Background(), "r1", PushOpts{})

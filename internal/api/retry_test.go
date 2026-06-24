@@ -30,7 +30,7 @@ func TestRetryEndpointSucceeded409(t *testing.T) {
 	hs, _, st := testServer(t)
 	st.CreateRun(context.Background(), core.RunState{
 		ID: "r1", Status: core.RunSucceeded,
-		FlowYAML: "name: f\nsteps:\n  - id: a\n    agent: mock\n",
+		FlowYAML: "name: f\nsteps:\n  - id: a\n    agent: mock\n    prompt: p\n",
 	})
 	resp, err := http.Post(hs.URL+"/v1/runs/r1/retry", "application/json", nil)
 	if err != nil {
@@ -48,7 +48,7 @@ func TestRetryEndpointResumesFailedRun(t *testing.T) {
 	}
 	hs, st := newGitServer(t)
 	flag := filepath.Join(t.TempDir(), "ok")
-	yaml := "name: f\nsteps:\n  - id: a\n    agent: mock\n    workspace: isolated\n    gate: { policy: auto, verifier: { command: \"test -f " + flag + "\" } }\n"
+	yaml := "name: f\nsteps:\n  - id: a\n    agent: mock\n    prompt: p\n    workspace: isolated\n    gate: { policy: auto, verifier: { command: \"test -f " + flag + "\" } }\n"
 
 	resp, err := http.Post(hs.URL+"/v1/runs", "application/x-yaml", strings.NewReader(yaml))
 	if err != nil {

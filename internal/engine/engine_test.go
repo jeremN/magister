@@ -61,10 +61,10 @@ func mustCreate(t *testing.T, st *store.Mem, id core.RunID, f *flow.Flow) {
 
 func TestEngineFanOutFanIn(t *testing.T) {
 	f := &flow.Flow{Name: "feat", Concurrency: 2, Steps: []*flow.Step{
-		{ID: "plan", Agent: "opus", Gate: flow.Gate{Policy: flow.GateManual}},
-		{ID: "api", Needs: []string{"plan"}, Agent: "sonnet", Workspace: flow.WSIsolated,
+		{ID: "plan", Agent: "opus", Prompt: "p", Gate: flow.Gate{Policy: flow.GateManual}},
+		{ID: "api", Needs: []string{"plan"}, Agent: "sonnet", Prompt: "p", Workspace: flow.WSIsolated,
 			Gate: flow.Gate{Policy: flow.GateAuto, Verifier: &flow.Verifier{Command: "true"}}},
-		{ID: "ui", Needs: []string{"plan"}, Agent: "gemini", Workspace: flow.WSIsolated,
+		{ID: "ui", Needs: []string{"plan"}, Agent: "gemini", Prompt: "p", Workspace: flow.WSIsolated,
 			Gate: flow.Gate{Policy: flow.GateAuto, Verifier: &flow.Verifier{Command: "true"}}},
 		{ID: "integrate", Needs: []string{"api", "ui"}, Workspace: flow.WSIsolated,
 			Join: &flow.Join{Strategy: flow.JoinMerge}, Gate: flow.Gate{Policy: flow.GateManual}},
@@ -157,12 +157,12 @@ func TestEngineWideFanInNoDeadlock(t *testing.T) {
 	// 20 real git worktrees + a 20-branch merge take a few seconds, and much longer
 	// under CI load, so the bound is generous on purpose (a true deadlock never
 	// returns regardless).
-	steps := []*flow.Step{{ID: "root", Agent: "opus", Gate: flow.Gate{Policy: flow.GateManual}}}
+	steps := []*flow.Step{{ID: "root", Agent: "opus", Prompt: "p", Gate: flow.Gate{Policy: flow.GateManual}}}
 	var needs []string
 	for i := 0; i < 20; i++ {
 		id := fmt.Sprintf("w%d", i)
 		needs = append(needs, id)
-		steps = append(steps, &flow.Step{ID: id, Needs: []string{"root"}, Agent: "sonnet", Workspace: flow.WSIsolated,
+		steps = append(steps, &flow.Step{ID: id, Needs: []string{"root"}, Agent: "sonnet", Prompt: "p", Workspace: flow.WSIsolated,
 			Gate: flow.Gate{Policy: flow.GateManual}})
 	}
 	steps = append(steps, &flow.Step{ID: "join", Needs: needs, Workspace: flow.WSIsolated,
@@ -293,7 +293,7 @@ func TestTransitionDoesNotPublishOriginalOnStoreError(t *testing.T) {
 // fails) rather than silently reporting success.
 func TestStepSuccessTransitionPersistFailureFails(t *testing.T) {
 	f := &flow.Flow{Name: "persist-fail", Steps: []*flow.Step{
-		{ID: "a", Agent: "mock", Gate: flow.Gate{Policy: flow.GateManual}},
+		{ID: "a", Agent: "mock", Prompt: "p", Gate: flow.Gate{Policy: flow.GateManual}},
 	}}
 	if err := flow.Validate(f); err != nil {
 		t.Fatalf("flow invalid: %v", err)
@@ -701,7 +701,7 @@ func (emittingExec) Run(ctx context.Context, tk core.Task) (core.Result, error) 
 
 func TestEngineForwardsAgentMilestones(t *testing.T) {
 	f := &flow.Flow{Name: "feat", Concurrency: 1, Steps: []*flow.Step{
-		{ID: "s1", Agent: "x", Gate: flow.Gate{Policy: flow.GateAuto, Verifier: &flow.Verifier{Command: "true"}}},
+		{ID: "s1", Agent: "x", Prompt: "p", Gate: flow.Gate{Policy: flow.GateAuto, Verifier: &flow.Verifier{Command: "true"}}},
 	}}
 	if err := flow.Validate(f); err != nil {
 		t.Fatalf("flow invalid: %v", err)
@@ -1303,9 +1303,9 @@ func TestMergeConflictEscalateResumesRemainingBranches(t *testing.T) {
 	autoGate := flow.Gate{Policy: flow.GateAuto, Verifier: &flow.Verifier{Command: "true"}}
 	// Needs order [a,b,c] fixes the merge order: a (clean), b (conflict), c (clean).
 	f := &flow.Flow{Name: "f", Steps: []*flow.Step{
-		{ID: "a", Agent: "a", Workspace: flow.WSIsolated, Gate: autoGate},
-		{ID: "b", Agent: "b", Workspace: flow.WSIsolated, Gate: autoGate},
-		{ID: "c", Agent: "c", Workspace: flow.WSIsolated, Gate: autoGate},
+		{ID: "a", Agent: "a", Prompt: "p", Workspace: flow.WSIsolated, Gate: autoGate},
+		{ID: "b", Agent: "b", Prompt: "p", Workspace: flow.WSIsolated, Gate: autoGate},
+		{ID: "c", Agent: "c", Prompt: "p", Workspace: flow.WSIsolated, Gate: autoGate},
 		{ID: "integrate", Needs: []string{"a", "b", "c"}, Workspace: flow.WSIsolated,
 			Join: &flow.Join{Strategy: flow.JoinMerge, Agent: "arbiter", OnConflict: flow.FailEscalate}},
 	}}
@@ -1397,10 +1397,10 @@ func TestMergeConflictEscalateResumesAcrossTwoConflicts(t *testing.T) {
 	eng, st := newGitEngine(t, execs)
 	autoGate := flow.Gate{Policy: flow.GateAuto, Verifier: &flow.Verifier{Command: "true"}}
 	f := &flow.Flow{Name: "f", Steps: []*flow.Step{
-		{ID: "a", Agent: "a", Workspace: flow.WSIsolated, Gate: autoGate},
-		{ID: "b", Agent: "b", Workspace: flow.WSIsolated, Gate: autoGate},
-		{ID: "c", Agent: "c", Workspace: flow.WSIsolated, Gate: autoGate},
-		{ID: "d", Agent: "d", Workspace: flow.WSIsolated, Gate: autoGate},
+		{ID: "a", Agent: "a", Prompt: "p", Workspace: flow.WSIsolated, Gate: autoGate},
+		{ID: "b", Agent: "b", Prompt: "p", Workspace: flow.WSIsolated, Gate: autoGate},
+		{ID: "c", Agent: "c", Prompt: "p", Workspace: flow.WSIsolated, Gate: autoGate},
+		{ID: "d", Agent: "d", Prompt: "p", Workspace: flow.WSIsolated, Gate: autoGate},
 		{ID: "integrate", Needs: []string{"a", "b", "c", "d"}, Workspace: flow.WSIsolated,
 			Join: &flow.Join{Strategy: flow.JoinMerge, Agent: "arbiter", OnConflict: flow.FailEscalate}},
 	}}

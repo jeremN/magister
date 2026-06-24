@@ -63,8 +63,8 @@ func TestResumeSkipsSucceededRerunsRest(t *testing.T) {
 	st := store.NewMem()
 
 	f := &flow.Flow{Name: "f", Steps: []*flow.Step{
-		{ID: "a", Agent: "mock", Gate: flow.Gate{Policy: flow.GateManual}},
-		{ID: "b", Needs: []string{"a"}, Agent: "mock", Gate: flow.Gate{Policy: flow.GateManual}},
+		{ID: "a", Agent: "mock", Prompt: "p", Gate: flow.Gate{Policy: flow.GateManual}},
+		{ID: "b", Needs: []string{"a"}, Agent: "mock", Prompt: "p", Gate: flow.Gate{Policy: flow.GateManual}},
 	}}
 	if err := flow.Validate(f); err != nil {
 		t.Fatal(err)
@@ -136,9 +136,9 @@ func TestKillAndResumeAcrossSQLiteReopen(t *testing.T) {
 	dbPath := filepath.Join(dir, "runs.db")
 
 	f := &flow.Flow{Name: "f", Steps: []*flow.Step{
-		{ID: "a", Agent: "mock", Gate: flow.Gate{Policy: flow.GateManual}},
-		{ID: "b", Needs: []string{"a"}, Agent: "mock", Gate: flow.Gate{Policy: flow.GateManual}},
-		{ID: "c", Needs: []string{"b"}, Agent: "mock", Gate: flow.Gate{Policy: flow.GateManual}},
+		{ID: "a", Agent: "mock", Prompt: "p", Gate: flow.Gate{Policy: flow.GateManual}},
+		{ID: "b", Needs: []string{"a"}, Agent: "mock", Prompt: "p", Gate: flow.Gate{Policy: flow.GateManual}},
+		{ID: "c", Needs: []string{"b"}, Agent: "mock", Prompt: "p", Gate: flow.Gate{Policy: flow.GateManual}},
 	}}
 	if err := flow.Validate(f); err != nil {
 		t.Fatal(err)

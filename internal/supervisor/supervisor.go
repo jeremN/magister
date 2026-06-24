@@ -103,16 +103,35 @@ func (s *Supervisor) start(parent context.Context, id core.RunID, run func(conte
 	}()
 }
 
-// Cancel cancels an active run. Returns false if the run isn't active.
-func (s *Supervisor) Cancel(id core.RunID) bool {
+// CancelError carries an HTTP status so the API layer maps cancel failures without
+// string-matching. Status 404 = unknown run; 409 = run is known but not active.
+type CancelError struct {
+	Status int
+	Msg    string
+}
+
+func (e *CancelError) Error() string { return e.Msg }
+
+// Cancel cancels an active run. Returns nil on success, *CancelError(404) for an
+// unknown run, and *CancelError(409) for a known-but-terminal (non-active) run.
+func (s *Supervisor) Cancel(ctx context.Context, id core.RunID) error {
 	s.mu.Lock()
 	cancel, ok := s.runs[id]
 	s.mu.Unlock()
-	if !ok {
-		return false
+	if ok {
+		cancel()
+		return nil
 	}
-	cancel()
-	return true
+	// Not in the active map: distinguish unknown vs already-terminal via the store.
+	if _, err := s.store.GetRun(ctx, id); err != nil {
+		if errors.Is(err, core.ErrRunNotFound) {
+			return &CancelError{Status: http.StatusNotFound, Msg: "unknown run"}
+		}
+		// store error → treat as not-found (safe; caller gets 404 vs 5xx ambiguity
+		// is less important than not leaking store internals).
+		return &CancelError{Status: http.StatusNotFound, Msg: "unknown run"}
+	}
+	return &CancelError{Status: http.StatusConflict, Msg: "run not active"}
 }
 
 // Approve resolves a pending manual gate. Returns false if nothing is awaiting.

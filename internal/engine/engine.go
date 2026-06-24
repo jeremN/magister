@@ -364,8 +364,16 @@ func (e *Engine) runStep(ctx context.Context, runID core.RunID, s *flow.Step, in
 		}
 		// best-effort: already on the failure path; a persist error here is surfaced via
 		// the synthetic StepFailed publish inside transition.
-		_ = e.transition(ctx, runID, stepState(runID, s.ID, core.StepFailed, attempt, workDir, core.Result{}, lastErr),
-			event.Event{StepID: s.ID, Kind: event.StepFailed, Attempt: attempt, Err: lastErr.Error()})
+		// If the run context was canceled (e.g. the step was blocked awaiting a gate),
+		// record StepCanceled rather than StepFailed to reflect the actual cause.
+		termStatus := core.StepFailed
+		termKind := event.StepFailed
+		if errors.Is(lastErr, context.Canceled) {
+			termStatus = core.StepCanceled
+			termKind = event.StepFailed // no StepCanceled event kind; reuse StepFailed for the bus
+		}
+		_ = e.transition(ctx, runID, stepState(runID, s.ID, termStatus, attempt, workDir, core.Result{}, lastErr),
+			event.Event{StepID: s.ID, Kind: termKind, Attempt: attempt, Err: lastErr.Error()})
 		return core.Result{}, lastErr
 	}
 	return core.Result{}, lastErr

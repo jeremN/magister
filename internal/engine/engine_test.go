@@ -1569,3 +1569,44 @@ func TestExecErrorThreadsNoFeedback(t *testing.T) {
 		}
 	}
 }
+
+// TestStepCanceledWhileAwaitingGate asserts that a step canceled while blocked
+// on a manual gate is recorded as StepCanceled (not StepFailed).
+func TestStepCanceledWhileAwaitingGate(t *testing.T) {
+	st := store.NewMem()
+	ba := &blockingApprover{gate: make(chan bool, 1), await: make(chan struct{})}
+	e := &Engine{
+		Execs: map[string]core.Executor{"mock": executor.Mock{Name: "mock"}},
+		WS:    &workspace.Manager{Root: t.TempDir()},
+		Gate:  &gate.Evaluator{Approver: ba, Verifier: gate.CommandVerifier{}},
+		Joins: join.Default(),
+		Store: st, Bus: event.NewBus(), Clock: core.SystemClock{},
+	}
+	f := &flow.Flow{Name: "gc", Steps: []*flow.Step{
+		{ID: "a", Agent: "mock", Gate: flow.Gate{Policy: flow.GateManual}},
+	}}
+	mustCreate(t, st, "r1", f)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- e.Run(ctx, "r1", f) }()
+
+	// Wait until the step is blocked inside the gate's Approve call.
+	<-ba.await
+	// Cancel the run while the gate is still waiting for a human decision.
+	cancel()
+
+	if err := <-done; err == nil {
+		t.Fatal("expected cancellation error from Run")
+	}
+	got, _ := st.GetRun(context.Background(), "r1")
+	if got.Status != core.RunCanceled {
+		t.Fatalf("run status = %q, want canceled", got.Status)
+	}
+	if len(got.Steps) == 0 {
+		t.Fatal("no step state recorded")
+	}
+	if got.Steps[0].Status != core.StepCanceled {
+		t.Fatalf("step status = %q, want canceled", got.Steps[0].Status)
+	}
+}

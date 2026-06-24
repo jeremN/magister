@@ -1,6 +1,6 @@
-# Handoff — `cm tui` live terminal dashboard: MERGED to LOCAL main, NOT PUSHED (2026-06-24)
+# Handoff — `cm tui` live terminal dashboard: MERGED & PUSHED (2026-06-24)
 
-**Start here next session.** The **`cm tui` slice is DONE and MERGED to LOCAL `main`** — `main` at **`4426f13`** (merge commit `merge: cm tui terminal dashboard`). **NOT pushed** — `origin/main` is still **`30dfa51`**; local `main` is ahead by the 7-commit TUI slice **plus 3 unpushed doc commits** (README `3143baa`, tui spec `cc7fd68`, tui plan `8cafe9f`). Full `go test -race ./...` = **480 passed / 20 packages** on merged main, `gofmt` clean, **`go.mod` still `go 1.22`**, only-new-dep `golang.org/x/term v0.27.0` (direct, tidy-clean). Final Opus whole-branch review **Ready-to-merge = Yes, 0 Critical / 0 Important / 5 Minor** (1 added as a zero-risk hardening `da7339d`; the other 4 are recorded follow-ups below). Worktree (`.claude/worktrees/tui`) removed, branch `worktree-tui` deleted (its commits are reachable from `4426f13` — verified `merge-base --is-ancestor da7339d main`). Only the `multi-host` worktree remains (untouched — still blocked on a gitlab.com MR proof).
+**Start here next session.** The **`cm tui` slice is DONE, MERGED, and PUSHED** — local `main` and **`origin/main` both carry it** (merge commit `4426f13 merge: cm tui terminal dashboard`, pushed 2026-06-24 in the range `30dfa51..6867c47` alongside README `3143baa`, tui spec `cc7fd68`, tui plan `8cafe9f`, and this handoff). Full `go test -race ./...` = **480 passed / 20 packages** on merged main, `gofmt` clean, **`go.mod` still `go 1.22`**, only-new-dep `golang.org/x/term v0.27.0` (direct, tidy-clean). Final Opus whole-branch review **Ready-to-merge = Yes, 0 Critical / 0 Important / 5 Minor** (1 added as a zero-risk hardening `da7339d`; the other 4 are recorded follow-ups below). Worktree (`.claude/worktrees/tui`) removed, branch `worktree-tui` deleted (its commits are reachable from `4426f13` — verified `merge-base --is-ancestor da7339d main`). Only the `multi-host` worktree remains (untouched — still blocked on a gitlab.com MR proof).
 
 ## What shipped
 
@@ -66,8 +66,8 @@ The non-TTY logic IS covered: `internal/tui` = 26 tests (client httptest, SSE fr
 
 ## Next-thread menu
 
-- **PUSH** local `main` to origin (`origin/main 30dfa51..4426f13`) — carries the TUI slice **+ the README + tui spec/plan**. Gated on an explicit user "push" (the harness rejects an ambiguous reply for a default-branch push).
-- **Run the manual TTY smoke** (above) and record the result.
+- ~~PUSH local `main` to origin~~ — **DONE 2026-06-24** (`origin/main 30dfa51..6867c47`, carries the TUI slice + README + tui spec/plan + this handoff).
+- **Run the manual TTY smoke** (above) and record the result — the top remaining item.
 - **Close follow-up #1+#2 together** (the `redrawMsg` + terminal-status signal) as a small slice.
 - **A `cm tui` README section** (follow-up #4).
 - **Unblock the multi-host GitLab slice** (`.worktrees/multi-host` @ `36eb9fa`) — still needs a live gitlab.com MR proof (user has no gitlab.com account yet; handoff `2026-06-19-multi-host-gitlab-next-steps.md`).

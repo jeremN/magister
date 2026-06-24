@@ -1,6 +1,7 @@
 package join
 
 import (
+	"context"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -16,7 +17,7 @@ func TestCommittedResultEnumeratesTree(t *testing.T) {
 	gitX(t, joinDir, "add", "-A")
 	gitX(t, joinDir, "commit", "-m", "work")
 
-	res, err := CommittedResult(joinDir, &flow.Step{ID: "integrate"})
+	res, err := CommittedResult(context.Background(), joinDir, &flow.Step{ID: "integrate"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +39,7 @@ func TestCommittedResultEnumeratesTree(t *testing.T) {
 
 func TestCommittedResultEmptyTree(t *testing.T) {
 	joinDir, _ := setupJoinRepo(t, false) // join worktree off empty base, no tracked files
-	res, err := CommittedResult(joinDir, &flow.Step{ID: "integrate"})
+	res, err := CommittedResult(context.Background(), joinDir, &flow.Step{ID: "integrate"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +57,7 @@ func TestCommittedResultHandlesSpecialPaths(t *testing.T) {
 	gitX(t, joinDir, "add", "-A")
 	gitX(t, joinDir, "commit", "-m", "work")
 
-	res, err := CommittedResult(joinDir, &flow.Step{ID: "integrate"})
+	res, err := CommittedResult(context.Background(), joinDir, &flow.Step{ID: "integrate"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,6 +1,7 @@
 package workspace_test
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -23,7 +24,7 @@ func TestGitManagerReclaimRemovesRunScratch(t *testing.T) {
 	mkdirAll(t, filepath.Join(runDir, "base"))
 	mkdirAll(t, filepath.Join(runDir, "wt", "stepA"))
 
-	removed, err := m.Reclaim("run1")
+	removed, err := m.Reclaim(context.Background(), "run1")
 	if err != nil {
 		t.Fatalf("Reclaim: %v", err)
 	}
@@ -34,7 +35,7 @@ func TestGitManagerReclaimRemovesRunScratch(t *testing.T) {
 		t.Errorf("run dir still present: %v", err)
 	}
 	// idempotent: a second reclaim of a missing dir is not an error and removes nothing
-	removed, err = m.Reclaim("run1")
+	removed, err = m.Reclaim(context.Background(), "run1")
 	if err != nil {
 		t.Errorf("second Reclaim: %v", err)
 	}
@@ -50,7 +51,7 @@ func TestGitManagerReclaimRejectsUnsafeID(t *testing.T) {
 	m := &workspace.GitManager{Root: root}
 
 	for _, id := range []core.RunID{"", ".", "..", "a/b", "../keep"} {
-		if removed, err := m.Reclaim(id); err == nil || removed {
+		if removed, err := m.Reclaim(context.Background(), id); err == nil || removed {
 			t.Errorf("Reclaim(%q) = (%v, %v), want (false, error)", id, removed, err)
 		}
 	}
@@ -66,7 +67,7 @@ func TestManagerReclaimRemovesRunDir(t *testing.T) {
 	root := t.TempDir()
 	m := &workspace.Manager{Root: root}
 	mkdirAll(t, filepath.Join(root, "run9", "stepX"))
-	removed, err := m.Reclaim("run9")
+	removed, err := m.Reclaim(context.Background(), "run9")
 	if err != nil {
 		t.Fatalf("Reclaim: %v", err)
 	}
@@ -77,10 +78,10 @@ func TestManagerReclaimRemovesRunDir(t *testing.T) {
 		t.Errorf("run dir still present")
 	}
 	// idempotent: a second reclaim of the now-missing dir removes nothing
-	if removed, err := m.Reclaim("run9"); err != nil || removed {
+	if removed, err := m.Reclaim(context.Background(), "run9"); err != nil || removed {
 		t.Errorf("second Reclaim(\"run9\") = (%v, %v), want (false, nil)", removed, err)
 	}
-	if removed, err := m.Reclaim(".."); err == nil || removed {
+	if removed, err := m.Reclaim(context.Background(), ".."); err == nil || removed {
 		t.Errorf("Reclaim(\"..\") = (%v, %v), want (false, error)", removed, err)
 	}
 }

@@ -67,7 +67,7 @@ func (s *Supervisor) Submit(ctx context.Context, f *flow.Flow, flowYAML, repo, b
 	}); err != nil {
 		return "", fmt.Errorf("create run: %w", err)
 	}
-	if err := s.engine.Provision(id, repo, base); err != nil {
+	if err := s.engine.Provision(ctx, id, repo, base); err != nil {
 		return "", fmt.Errorf("provision run: %w", err)
 	}
 	s.start(ctx, id, func(runCtx context.Context) error { return s.engine.Run(runCtx, id, f) })
@@ -186,7 +186,7 @@ func (s *Supervisor) ResumeAll(ctx context.Context) error {
 // caller decides whether that is fatal.
 func (s *Supervisor) resumeRun(ctx context.Context, rs core.RunState, f *flow.Flow) error {
 	s.resetIncompleteSteps(ctx, rs)
-	if err := s.engine.Provision(rs.ID, rs.Repo, rs.Base); err != nil {
+	if err := s.engine.Provision(ctx, rs.ID, rs.Repo, rs.Base); err != nil {
 		return fmt.Errorf("provision run: %w", err)
 	}
 	s.start(ctx, rs.ID, func(runCtx context.Context) error { return s.engine.Resume(runCtx, rs, f) })
@@ -290,7 +290,7 @@ func (s *Supervisor) Push(ctx context.Context, runID core.RunID, opts PushOpts) 
 	if base == "" || !dirHasGit(base) {
 		return PushResult{}, pushErr(http.StatusNotFound, "scratch repo for run %q not found (reclaimed?)", runID)
 	}
-	if err := workspace.PushBranch(base, remoteURL, branch, dest, opts.Force); err != nil {
+	if err := workspace.PushBranch(ctx, base, remoteURL, branch, dest, opts.Force); err != nil {
 		return PushResult{}, pushErr(http.StatusBadGateway, "%v", err)
 	}
 	return PushResult{Remote: remoteURL, Branch: dest, SourceBranch: branch, Commit: commit}, nil

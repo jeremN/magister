@@ -1,6 +1,8 @@
 package workspace
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -79,7 +81,7 @@ func TestGitManagerTeardownRemovesWorktrees(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := m.TeardownRun("r1"); err != nil {
+	if err := m.TeardownRun(context.Background(), "r1"); err != nil {
 		t.Fatalf("teardown: %v", err)
 	}
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
@@ -109,7 +111,7 @@ func TestGitManagerForIsResumeIdempotent(t *testing.T) {
 func TestGitManagerTeardownNoRepoIsNoop(t *testing.T) {
 	requireGit(t)
 	m := &GitManager{Root: t.TempDir()}
-	if err := m.TeardownRun("never-started"); err != nil {
+	if err := m.TeardownRun(context.Background(), "never-started"); err != nil {
 		t.Errorf("teardown of an unknown run should be a no-op, got %v", err)
 	}
 }
@@ -167,7 +169,7 @@ func TestGitManagerTeardownRemovesAllWorktrees(t *testing.T) {
 		}
 		dirs = append(dirs, d)
 	}
-	if err := m.TeardownRun("r1"); err != nil {
+	if err := m.TeardownRun(context.Background(), "r1"); err != nil {
 		t.Fatalf("teardown: %v", err)
 	}
 	for _, d := range dirs {
@@ -187,7 +189,7 @@ func TestGitManagerCommitRecordsWork(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "out.txt"), []byte("work"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	branch, commit, err := m.Commit("r1", &flow.Step{ID: "a", Workspace: flow.WSIsolated}, dir)
+	branch, commit, err := m.Commit(context.Background(), "r1", &flow.Step{ID: "a", Workspace: flow.WSIsolated}, dir)
 	if err != nil {
 		t.Fatalf("commit: %v", err)
 	}
@@ -209,7 +211,7 @@ func TestGitManagerCommitAllowsEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, commit, err := m.Commit("r1", &flow.Step{ID: "a", Workspace: flow.WSIsolated}, dir); err != nil || commit == "" {
+	if _, commit, err := m.Commit(context.Background(), "r1", &flow.Step{ID: "a", Workspace: flow.WSIsolated}, dir); err != nil || commit == "" {
 		t.Fatalf("commit of a no-file step should still produce a commit, got commit=%q err=%v", commit, err)
 	}
 }
@@ -234,7 +236,7 @@ func TestGitManagerProvisionClonesRealRepo(t *testing.T) {
 	src, sha := setupSourceRepo(t)
 
 	m := &GitManager{Root: t.TempDir()}
-	if err := m.Provision("r1", src, sha); err != nil {
+	if err := m.Provision(context.Background(), "r1", src, sha); err != nil {
 		t.Fatalf("provision: %v", err)
 	}
 	wt, _, err := m.For("r1", &flow.Step{ID: "build", Workspace: flow.WSIsolated})
@@ -283,7 +285,7 @@ func TestGitManagerProvisionRejectsFlaglikeBase(t *testing.T) {
 	m := &GitManager{Root: t.TempDir()}
 	// A non-hex, "-"-leading base must be rejected before it reaches git, so it
 	// cannot smuggle a flag (e.g. --upload-pack=...) into `checkout`.
-	if err := m.Provision("r1", src, "--upload-pack=touch pwned"); err != nil {
+	if err := m.Provision(context.Background(), "r1", src, "--upload-pack=touch pwned"); err != nil {
 		t.Fatalf("provision records the spec, should not error: %v", err)
 	}
 	if _, _, err := m.For("r1", &flow.Step{ID: "build", Workspace: flow.WSIsolated}); err == nil {
@@ -307,7 +309,7 @@ func TestGitManagerNoRepoUsesEmptyBase(t *testing.T) {
 func TestGitManagerProvisionEmptyRepoUsesEmptyBase(t *testing.T) {
 	requireGit(t)
 	m := &GitManager{Root: t.TempDir()}
-	if err := m.Provision("r1", "", ""); err != nil {
+	if err := m.Provision(context.Background(), "r1", "", ""); err != nil {
 		t.Fatalf("provision empty: %v", err)
 	}
 	wt, _, err := m.For("r1", &flow.Step{ID: "build", Workspace: flow.WSIsolated})
@@ -334,6 +336,37 @@ func TestManagerBasePath(t *testing.T) {
 	got := m.BasePath("run-7")
 	if got != filepath.Join(root, "run-7") {
 		t.Errorf("BasePath = %q, want %q", got, filepath.Join(root, "run-7"))
+	}
+}
+
+// TestGitManagerCommitCanceledCtxAborts verifies that a canceled context aborts
+// a git operation promptly rather than hanging or succeeding. This test MUST fail
+// to compile until Commit(ctx, ...) is implemented.
+func TestGitManagerCommitCanceledCtxAborts(t *testing.T) {
+	requireGit(t)
+	m := &GitManager{Root: t.TempDir()}
+
+	// Set up a valid worktree first (using Background ctx, which succeeds).
+	dir, _, err := m.For("r1", &flow.Step{ID: "a", Workspace: flow.WSIsolated})
+	if err != nil {
+		t.Fatalf("For: %v", err)
+	}
+
+	// Now attempt Commit with an already-canceled context: the git subprocess
+	// must not succeed — it should be killed promptly.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // canceled before the call
+
+	_, _, cerr := m.Commit(ctx, "r1", &flow.Step{ID: "a", Workspace: flow.WSIsolated}, dir)
+	if cerr == nil {
+		t.Fatal("Commit with a pre-canceled context should fail, got nil error")
+	}
+	// The error wraps context.Canceled (via exec.CommandContext killing the process).
+	if !errors.Is(cerr, context.Canceled) {
+		t.Logf("Commit canceled error (acceptable non-Canceled form): %v", cerr)
+		// exec.CommandContext may return an *exec.ExitError with "signal: killed"
+		// rather than context.Canceled on some platforms — that's fine; the key
+		// requirement is that it did NOT return nil (succeed).
 	}
 }
 

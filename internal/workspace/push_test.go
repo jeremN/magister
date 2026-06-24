@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -97,7 +98,7 @@ func TestPushBranchNewBranch(t *testing.T) {
 	bare := t.TempDir()
 	gitOut(t, bare, "init", "--bare")
 
-	if err := PushBranch(scratch, bare, "step/integrate", "magister/run-1", false); err != nil {
+	if err := PushBranch(context.Background(), scratch, bare, "step/integrate", "magister/run-1", false); err != nil {
 		t.Fatalf("push: %v", err)
 	}
 	if got := gitOut(t, bare, "rev-parse", "magister/run-1"); got != sha {
@@ -110,15 +111,15 @@ func TestPushBranchRefusesNonFastForwardWithoutForce(t *testing.T) {
 	scratch, _ := setupScratchWithBranch(t, "step/integrate")
 	bare := t.TempDir()
 	gitOut(t, bare, "init", "--bare")
-	if err := PushBranch(scratch, bare, "step/integrate", "magister/run-1", false); err != nil {
+	if err := PushBranch(context.Background(), scratch, bare, "step/integrate", "magister/run-1", false); err != nil {
 		t.Fatalf("first push: %v", err)
 	}
 	// Rewrite the branch to a different history (non-fast-forward).
 	gitOut(t, scratch, "commit", "--amend", "-m", "rewritten")
-	if err := PushBranch(scratch, bare, "step/integrate", "magister/run-1", false); err == nil {
+	if err := PushBranch(context.Background(), scratch, bare, "step/integrate", "magister/run-1", false); err == nil {
 		t.Error("expected non-fast-forward push to be refused without --force")
 	}
-	if err := PushBranch(scratch, bare, "step/integrate", "magister/run-1", true); err != nil {
+	if err := PushBranch(context.Background(), scratch, bare, "step/integrate", "magister/run-1", true); err != nil {
 		t.Errorf("force push should succeed: %v", err)
 	}
 }
@@ -128,10 +129,10 @@ func TestPushBranchRejectsFlaglikeBranch(t *testing.T) {
 	scratch, _ := setupScratchWithBranch(t, "step/integrate")
 	bare := t.TempDir()
 	gitOut(t, bare, "init", "--bare")
-	if err := PushBranch(scratch, bare, "step/integrate", "--force", false); err == nil {
+	if err := PushBranch(context.Background(), scratch, bare, "step/integrate", "--force", false); err == nil {
 		t.Error("expected a flag-like destination branch to be rejected")
 	}
-	if err := PushBranch(scratch, bare, "--upload-pack=x", "magister/run-1", false); err == nil {
+	if err := PushBranch(context.Background(), scratch, bare, "--upload-pack=x", "magister/run-1", false); err == nil {
 		t.Error("expected a flag-like source branch to be rejected")
 	}
 }

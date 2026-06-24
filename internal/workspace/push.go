@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -45,8 +46,9 @@ func ResolveRemote(sourceRepo, remote string) (string, error) {
 // Without force, git refuses a non-fast-forward overwrite of an existing ref; a
 // new branch always succeeds. The combined git output rides on the error so push
 // failures (auth/network/non-fast-forward) surface the remote's message. Credentials
-// come from the ambient git environment — none are handled here.
-func PushBranch(scratchBase, remoteURL, srcBranch, destBranch string, force bool) error {
+// come from the ambient git environment — none are handled here. ctx cancels the
+// underlying git subprocess (e.g. on a hung network push).
+func PushBranch(ctx context.Context, scratchBase, remoteURL, srcBranch, destBranch string, force bool) error {
 	if scratchBase == "" || !filepath.IsAbs(scratchBase) {
 		return fmt.Errorf("scratch base path must be absolute: %q", scratchBase)
 	}
@@ -64,7 +66,7 @@ func PushBranch(scratchBase, remoteURL, srcBranch, destBranch string, force bool
 	// remote/branch can't be parsed as a flag (the refs are also safeRef-validated).
 	args = append(args, "--", remoteURL, srcBranch+":refs/heads/"+destBranch)
 	// #nosec G204 -- git push without a shell; refs validated; operands after --.
-	cmd := exec.Command("git", args...)
+	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = scratchBase
 	out, err := cmd.CombinedOutput()
 	if err != nil {

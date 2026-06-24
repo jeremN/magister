@@ -3,6 +3,7 @@ package executor
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -14,9 +15,10 @@ import (
 // discoverGit lists files changed in workDir via `git status --porcelain`, as
 // absolute-path artifacts (StepID is filled in by CLIAgent). It is CLIAgent's
 // default discoverer; a non-nil error is treated as non-fatal by the caller.
-func discoverGit(workDir string) ([]core.Artifact, error) {
+// ctx cancels the underlying git subprocess.
+func discoverGit(ctx context.Context, workDir string) ([]core.Artifact, error) {
 	// #nosec G204 -- fixed git subcommand in an operator-controlled workdir; no shell.
-	cmd := exec.Command("git", "status", "--porcelain")
+	cmd := exec.CommandContext(ctx, "git", "status", "--porcelain")
 	cmd.Dir = workDir
 	out, err := cmd.Output()
 	if err != nil {

@@ -566,11 +566,11 @@ type teardownSpy struct {
 	runs []core.RunID
 }
 
-func (s *teardownSpy) TeardownRun(id core.RunID) error {
+func (s *teardownSpy) TeardownRun(ctx context.Context, id core.RunID) error {
 	s.mu.Lock()
 	s.runs = append(s.runs, id)
 	s.mu.Unlock()
-	return s.Manager.TeardownRun(id)
+	return s.Manager.TeardownRun(ctx, id)
 }
 
 func TestRunDAGTearsDownWorkspaceAtEnd(t *testing.T) {

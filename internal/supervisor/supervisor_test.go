@@ -141,7 +141,7 @@ type provisionSpy struct {
 	got []string // "repo|base" per call
 }
 
-func (p *provisionSpy) Provision(id core.RunID, repo, base string) error {
+func (p *provisionSpy) Provision(_ context.Context, id core.RunID, repo, base string) error {
 	p.mu.Lock()
 	p.got = append(p.got, repo+"|"+base)
 	p.mu.Unlock()

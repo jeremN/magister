@@ -55,8 +55,8 @@ type Engine struct {
 // Provision records a run's source repo + pinned base SHA with the workspace
 // before the run starts (see core.Workspace.Provision). Empty repo selects the
 // synthetic empty-base scratch repo (default; today's behavior).
-func (e *Engine) Provision(runID core.RunID, repo, base string) error {
-	return e.WS.Provision(runID, repo, base)
+func (e *Engine) Provision(ctx context.Context, runID core.RunID, repo, base string) error {
+	return e.WS.Provision(ctx, runID, repo, base)
 }
 
 // BasePath returns a run's scratch base repo path (see core.Workspace.BasePath),
@@ -68,8 +68,8 @@ func (e *Engine) BasePath(runID core.RunID) string {
 // ReclaimScratch removes a run's scratch workspace and reports whether a directory
 // was actually removed. Delegates to the workspace; the scratch janitor calls it
 // after a run is terminal and past its retention TTL.
-func (e *Engine) ReclaimScratch(runID core.RunID) (bool, error) {
-	return e.WS.Reclaim(runID)
+func (e *Engine) ReclaimScratch(ctx context.Context, runID core.RunID) (bool, error) {
+	return e.WS.Reclaim(ctx, runID)
 }
 
 // Run executes one flow to completion from scratch. The run row must already
@@ -234,7 +234,8 @@ func (e *Engine) runDAG(parent context.Context, runID core.RunID, f *flow.Flow, 
 	// Reclaim the run's isolated worktrees now that all steps have finished and
 	// their artifact paths are no longer needed by dependents. Done before the
 	// final status write so observers who poll "succeeded" see a clean wt/. Best-effort.
-	if err := e.WS.TeardownRun(runID); err != nil {
+	// Use context.WithoutCancel so a run cancel doesn't skip teardown.
+	if err := e.WS.TeardownRun(context.WithoutCancel(ctx), runID); err != nil {
 		e.logger().Error("teardown run workspaces", "run", runID, "err", err)
 	}
 
@@ -319,7 +320,7 @@ func (e *Engine) runStep(ctx context.Context, runID core.RunID, s *flow.Step, in
 
 		res, gateFailed, execErr := e.attempt(ctx, runID, s, inputs, attempt, workDir, lastFeedback)
 		if execErr == nil {
-			if cerr := e.commitIsolated(runID, s, workDir, &res); cerr != nil {
+			if cerr := e.commitIsolated(ctx, runID, s, workDir, &res); cerr != nil {
 				execErr = cerr // a failed commit is a step failure → normal disposition
 			} else {
 				e.transition(ctx, runID, stepState(runID, s.ID, core.StepSucceeded, attempt, workDir, res, nil),
@@ -518,11 +519,11 @@ func (e *Engine) execute(ctx context.Context, runID core.RunID, s *flow.Step, in
 // branch and stamps the result's artifacts with the branch/commit. Joins
 // self-commit (the strategy does the git work) and shared steps have no branch,
 // so both are skipped. A commit failure is surfaced as a step failure.
-func (e *Engine) commitIsolated(runID core.RunID, s *flow.Step, workDir string, res *core.Result) error {
+func (e *Engine) commitIsolated(ctx context.Context, runID core.RunID, s *flow.Step, workDir string, res *core.Result) error {
 	if s.Workspace != flow.WSIsolated || s.Join != nil {
 		return nil
 	}
-	br, sha, err := e.WS.Commit(runID, s, workDir)
+	br, sha, err := e.WS.Commit(ctx, runID, s, workDir)
 	if err != nil {
 		return fmt.Errorf("commit step %q: %w", s.ID, err)
 	}
@@ -707,7 +708,7 @@ func (e *Engine) resolveConflictEscalation(ctx context.Context, runID core.RunID
 	}
 	// A botched resolution (markers still present) fails before the human reviews it,
 	// so we never ask for approval of — or commit — an unresolved merge.
-	if rerr := join.EnsureResolved(workDir); rerr != nil {
+	if rerr := join.EnsureResolved(ctx, workDir); rerr != nil {
 		e.transition(ctx, runID, stepState(runID, s.ID, core.StepFailed, next, workDir, core.Result{}, rerr),
 			event.Event{StepID: s.ID, Kind: event.StepFailed, Attempt: next, Err: rerr.Error()})
 		return core.Result{}, rerr
@@ -732,7 +733,7 @@ func (e *Engine) resolveConflictEscalation(ctx context.Context, runID core.RunID
 
 	// Approved: finalize the resolved worktree, concluding the in-progress merge of
 	// THIS conflicting branch. Branches after it in the merge order are not yet merged.
-	if _, _, cerr := e.WS.Commit(runID, s, workDir); cerr != nil {
+	if _, _, cerr := e.WS.Commit(ctx, runID, s, workDir); cerr != nil {
 		e.transition(ctx, runID, stepState(runID, s.ID, core.StepFailed, next, workDir, core.Result{}, cerr),
 			event.Event{StepID: s.ID, Kind: event.StepFailed, Attempt: next, Err: cerr.Error()})
 		return core.Result{}, cerr

@@ -40,25 +40,25 @@ func Default() Registry {
 // resolve-then-approve ladder), anything else aborts the merge and fails.
 type Merge struct{}
 
-func (Merge) Join(_ context.Context, s *flow.Step, inputs []core.Artifact, workDir string, _ RunAgent) (core.Result, error) {
+func (Merge) Join(ctx context.Context, s *flow.Step, inputs []core.Artifact, workDir string, _ RunAgent) (core.Result, error) {
 	branches := upstreamBranches(inputs)
 	if len(branches) == 0 {
 		return core.Result{}, fmt.Errorf("merge: no branch-backed inputs")
 	}
 	for _, br := range branches {
-		if _, err := gitCmd(workDir, "merge", "--no-edit", br); err != nil {
-			conflicted := conflictedPaths(workDir)
+		if _, err := gitCmd(ctx, workDir, "merge", "--no-edit", br); err != nil {
+			conflicted := conflictedPaths(ctx, workDir)
 			if len(conflicted) == 0 {
 				return core.Result{}, fmt.Errorf("merge %s: %w", br, err)
 			}
 			if s.Join.OnConflict == flow.FailEscalate {
 				return core.Result{}, &ConflictError{Branch: br, Paths: conflicted, WorkDir: workDir}
 			}
-			_, _ = gitCmd(workDir, "merge", "--abort")
+			_, _ = gitCmd(ctx, workDir, "merge", "--abort")
 			return core.Result{}, fmt.Errorf("merge conflict in %v", conflicted)
 		}
 	}
-	res, err := CommittedResult(workDir, s)
+	res, err := CommittedResult(ctx, workDir, s)
 	if err != nil {
 		return core.Result{}, err
 	}

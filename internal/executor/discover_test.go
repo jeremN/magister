@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -32,7 +33,7 @@ func TestDiscoverGitListsChangedFiles(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "out.txt"), []byte("hi"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	arts, err := discoverGit(dir)
+	arts, err := discoverGit(context.Background(), dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +44,7 @@ func TestDiscoverGitListsChangedFiles(t *testing.T) {
 
 func TestDiscoverGitEmptyWhenClean(t *testing.T) {
 	dir := initGitRepo(t)
-	arts, err := discoverGit(dir)
+	arts, err := discoverGit(context.Background(), dir)
 	if err != nil {
 		t.Fatal(err)
 	}

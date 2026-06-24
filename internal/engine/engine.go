@@ -302,7 +302,9 @@ func (e *Engine) runStep(ctx context.Context, runID core.RunID, s *flow.Step, in
 	var lastFeedback string
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		if attempt > 1 {
-			e.transition(ctx, runID, stepState(runID, s.ID, core.StepRetrying, attempt, workDir, core.Result{}, lastErr),
+			// best-effort: already in a retry path; a persist error here is surfaced via
+			// the synthetic StepFailed publish inside transition — not fatal to the loop.
+			_ = e.transition(ctx, runID, stepState(runID, s.ID, core.StepRetrying, attempt, workDir, core.Result{}, lastErr),
 				event.Event{StepID: s.ID, Kind: event.StepRetrying, Attempt: attempt})
 			e.Metrics.StepRetried()
 			if !e.backoff(ctx, runID, s, attempt) {
@@ -315,7 +317,9 @@ func (e *Engine) runStep(ctx context.Context, runID core.RunID, s *flow.Step, in
 				"run", string(runID), "step", s.ID, "attempt", attempt, "feedback_bytes", len(lastFeedback))
 		}
 
-		e.transition(ctx, runID, stepState(runID, s.ID, core.StepRunning, attempt, workDir, core.Result{}, nil),
+		// best-effort: transitioning to Running is intermediate; a persist error here is
+		// surfaced via the synthetic StepFailed publish inside transition.
+		_ = e.transition(ctx, runID, stepState(runID, s.ID, core.StepRunning, attempt, workDir, core.Result{}, nil),
 			event.Event{StepID: s.ID, Kind: event.StepStarted, Attempt: attempt})
 
 		res, gateFailed, execErr := e.attempt(ctx, runID, s, inputs, attempt, workDir, lastFeedback)
@@ -323,9 +327,14 @@ func (e *Engine) runStep(ctx context.Context, runID core.RunID, s *flow.Step, in
 			if cerr := e.commitIsolated(ctx, runID, s, workDir, &res); cerr != nil {
 				execErr = cerr // a failed commit is a step failure → normal disposition
 			} else {
-				e.transition(ctx, runID, stepState(runID, s.ID, core.StepSucceeded, attempt, workDir, res, nil),
-					event.Event{StepID: s.ID, Kind: event.StepDone, Summary: res.Summary, CostUSD: res.CostUSD, Attempt: attempt})
-				return res, nil
+				// Critical: a persist failure on the terminal-success transition must not
+				// silently succeed — treat it as a step failure so the run fails too.
+				if perr := e.transition(ctx, runID, stepState(runID, s.ID, core.StepSucceeded, attempt, workDir, res, nil),
+					event.Event{StepID: s.ID, Kind: event.StepDone, Summary: res.Summary, CostUSD: res.CostUSD, Attempt: attempt}); perr != nil {
+					execErr = perr
+				} else {
+					return res, nil
+				}
 			}
 		}
 		lastErr = execErr
@@ -353,7 +362,9 @@ func (e *Engine) runStep(ctx context.Context, runID core.RunID, s *flow.Step, in
 		if gateFailed && gateEscalates(s) {
 			return e.escalate(ctx, runID, s, res, workDir, lastErr, attempt)
 		}
-		e.transition(ctx, runID, stepState(runID, s.ID, core.StepFailed, attempt, workDir, core.Result{}, lastErr),
+		// best-effort: already on the failure path; a persist error here is surfaced via
+		// the synthetic StepFailed publish inside transition.
+		_ = e.transition(ctx, runID, stepState(runID, s.ID, core.StepFailed, attempt, workDir, core.Result{}, lastErr),
 			event.Event{StepID: s.ID, Kind: event.StepFailed, Attempt: attempt, Err: lastErr.Error()})
 		return core.Result{}, lastErr
 	}
@@ -388,7 +399,8 @@ func (e *Engine) attempt(ctx context.Context, runID core.RunID, s *flow.Step, in
 	if gatePolicyOf(s) == flow.GateAuto {
 		gateCtx = attemptCtx // the verifier shares the step timeout
 	} else if gateBlocks(s) {
-		e.transition(ctx, runID, stepState(runID, s.ID, core.StepAwaitingGate, attemptNum, workDir, res, nil),
+		// best-effort: intermediate state; a persist error is surfaced via synthetic publish.
+		_ = e.transition(ctx, runID, stepState(runID, s.ID, core.StepAwaitingGate, attemptNum, workDir, res, nil),
 			event.Event{StepID: s.ID, Kind: event.GateAwaiting, Attempt: attemptNum})
 		e.Metrics.GateAwaited()
 	}
@@ -572,7 +584,9 @@ func (e *Engine) backoff(ctx context.Context, runID core.RunID, s *flow.Step, at
 
 // transition persists a step state + its event in one store call (durable),
 // then publishes the event to the live bus (persist-then-publish).
-func (e *Engine) transition(ctx context.Context, runID core.RunID, st core.StepState, ev event.Event) {
+// It returns the store error (if any) so callers on the success path can
+// surface a persist failure as a step/run failure instead of silently proceeding.
+func (e *Engine) transition(ctx context.Context, runID core.RunID, st core.StepState, ev event.Event) error {
 	ev.RunID = string(runID)
 	ev.At = e.Clock.Now()
 	if err := e.Store.SaveStepTransition(context.WithoutCancel(ctx), st, []event.Event{ev}); err != nil {
@@ -580,9 +594,10 @@ func (e *Engine) transition(ctx context.Context, runID core.RunID, st core.StepS
 		// original event. Surface the store error on the live stream and stop.
 		e.Bus.Publish(event.Event{RunID: string(runID), StepID: st.StepID, Kind: event.StepFailed, Err: "store: " + err.Error(), At: e.Clock.Now()})
 		e.logger().Error("save step transition", "run", runID, "step", st.StepID, "err", err)
-		return
+		return err
 	}
 	e.Bus.Publish(ev)
+	return nil
 }
 
 func stepState(runID core.RunID, stepID string, status core.StepStatus, attempt int, workDir string, res core.Result, err error) core.StepState {
@@ -627,24 +642,30 @@ func gateEscalates(s *flow.Step) bool {
 // block-on-channel path. The failure reason rides on the gate.awaiting event's Err.
 func (e *Engine) escalate(ctx context.Context, runID core.RunID, s *flow.Step, res core.Result, workDir string, gateErr error, attemptNum int) (core.Result, error) {
 	res.StepID = s.ID
-	e.transition(ctx, runID, stepState(runID, s.ID, core.StepAwaitingGate, attemptNum, workDir, res, gateErr),
+	// best-effort: intermediate awaiting state; a persist error is surfaced via synthetic publish.
+	_ = e.transition(ctx, runID, stepState(runID, s.ID, core.StepAwaitingGate, attemptNum, workDir, res, gateErr),
 		event.Event{StepID: s.ID, Kind: event.GateAwaiting, Attempt: attemptNum, Err: gateErr.Error()})
 	e.Metrics.GateAwaited()
 
 	ok, err := e.Gate.Escalate(ctx, runID, s, res)
 	if err != nil {
-		e.transition(ctx, runID, stepState(runID, s.ID, core.StepFailed, attemptNum, workDir, core.Result{}, err),
+		// best-effort: already on failure path.
+		_ = e.transition(ctx, runID, stepState(runID, s.ID, core.StepFailed, attemptNum, workDir, core.Result{}, err),
 			event.Event{StepID: s.ID, Kind: event.StepFailed, Attempt: attemptNum, Err: err.Error()})
 		return core.Result{}, err
 	}
 	if !ok {
 		rej := fmt.Errorf("escalated gate rejected")
-		e.transition(ctx, runID, stepState(runID, s.ID, core.StepFailed, attemptNum, workDir, core.Result{}, rej),
+		// best-effort: already on failure path.
+		_ = e.transition(ctx, runID, stepState(runID, s.ID, core.StepFailed, attemptNum, workDir, core.Result{}, rej),
 			event.Event{StepID: s.ID, Kind: event.StepFailed, Attempt: attemptNum, Err: rej.Error()})
 		return core.Result{}, rej
 	}
-	e.transition(ctx, runID, stepState(runID, s.ID, core.StepSucceeded, attemptNum, workDir, res, nil),
-		event.Event{StepID: s.ID, Kind: event.StepDone, Summary: res.Summary, CostUSD: res.CostUSD, Attempt: attemptNum})
+	// Critical: a persist failure on the terminal-success transition must not silently succeed.
+	if perr := e.transition(ctx, runID, stepState(runID, s.ID, core.StepSucceeded, attemptNum, workDir, res, nil),
+		event.Event{StepID: s.ID, Kind: event.StepDone, Summary: res.Summary, CostUSD: res.CostUSD, Attempt: attemptNum}); perr != nil {
+		return core.Result{}, perr
+	}
 	return res, nil
 }
 
@@ -658,19 +679,22 @@ func (e *Engine) escalateJoin(ctx context.Context, runID core.RunID, s *flow.Ste
 	if errors.As(joinErr, &conflict) {
 		return e.resolveConflictEscalation(ctx, runID, s, inputs, workDir, conflict, attemptNum)
 	}
-	e.transition(ctx, runID, stepState(runID, s.ID, core.StepAwaitingGate, attemptNum, workDir, core.Result{}, joinErr),
+	// best-effort: intermediate awaiting state; a persist error is surfaced via synthetic publish.
+	_ = e.transition(ctx, runID, stepState(runID, s.ID, core.StepAwaitingGate, attemptNum, workDir, core.Result{}, joinErr),
 		event.Event{StepID: s.ID, Kind: event.GateAwaiting, Attempt: attemptNum, Err: joinErr.Error()})
 	e.Metrics.GateAwaited()
 
 	ok, err := e.Gate.Escalate(ctx, runID, s, core.Result{})
 	if err != nil {
-		e.transition(ctx, runID, stepState(runID, s.ID, core.StepFailed, attemptNum, workDir, core.Result{}, err),
+		// best-effort: already on failure path.
+		_ = e.transition(ctx, runID, stepState(runID, s.ID, core.StepFailed, attemptNum, workDir, core.Result{}, err),
 			event.Event{StepID: s.ID, Kind: event.StepFailed, Attempt: attemptNum, Err: err.Error()})
 		return core.Result{}, err
 	}
 	if !ok {
 		rej := fmt.Errorf("escalated join rejected")
-		e.transition(ctx, runID, stepState(runID, s.ID, core.StepFailed, attemptNum, workDir, core.Result{}, rej),
+		// best-effort: already on failure path.
+		_ = e.transition(ctx, runID, stepState(runID, s.ID, core.StepFailed, attemptNum, workDir, core.Result{}, rej),
 			event.Event{StepID: s.ID, Kind: event.StepFailed, Attempt: attemptNum, Err: rej.Error()})
 		return core.Result{}, rej
 	}
@@ -678,12 +702,16 @@ func (e *Engine) escalateJoin(ctx context.Context, runID core.RunID, s *flow.Ste
 	// a gate failure on the re-run is terminal (no nested escalation).
 	res, _, execErr := e.attempt(ctx, runID, s, inputs, attemptNum+1, workDir, "")
 	if execErr != nil {
-		e.transition(ctx, runID, stepState(runID, s.ID, core.StepFailed, attemptNum+1, workDir, core.Result{}, execErr),
+		// best-effort: already on failure path.
+		_ = e.transition(ctx, runID, stepState(runID, s.ID, core.StepFailed, attemptNum+1, workDir, core.Result{}, execErr),
 			event.Event{StepID: s.ID, Kind: event.StepFailed, Attempt: attemptNum + 1, Err: execErr.Error()})
 		return core.Result{}, execErr
 	}
-	e.transition(ctx, runID, stepState(runID, s.ID, core.StepSucceeded, attemptNum+1, workDir, res, nil),
-		event.Event{StepID: s.ID, Kind: event.StepDone, Summary: res.Summary, CostUSD: res.CostUSD, Attempt: attemptNum + 1})
+	// Critical: a persist failure on the terminal-success transition must not silently succeed.
+	if perr := e.transition(ctx, runID, stepState(runID, s.ID, core.StepSucceeded, attemptNum+1, workDir, res, nil),
+		event.Event{StepID: s.ID, Kind: event.StepDone, Summary: res.Summary, CostUSD: res.CostUSD, Attempt: attemptNum + 1}); perr != nil {
+		return core.Result{}, perr
+	}
 	return res, nil
 }
 
@@ -696,37 +724,43 @@ func (e *Engine) escalateJoin(ctx context.Context, runID core.RunID, s *flow.Ste
 func (e *Engine) resolveConflictEscalation(ctx context.Context, runID core.RunID, s *flow.Step, inputs []core.Artifact, workDir string, conflict *join.ConflictError, attemptNum int) (core.Result, error) {
 	next := attemptNum + 1
 	// Frame the resolution as a fresh attempt (also closes the missing-step.started gap).
-	e.transition(ctx, runID, stepState(runID, s.ID, core.StepRunning, next, workDir, core.Result{}, nil),
+	// best-effort: intermediate Running state; a persist error is surfaced via synthetic publish.
+	_ = e.transition(ctx, runID, stepState(runID, s.ID, core.StepRunning, next, workDir, core.Result{}, nil),
 		event.Event{StepID: s.ID, Kind: event.StepStarted, Attempt: next})
 
 	// Rung 1: arbiter resolves the conflict markers in place.
 	ares, err := e.runAgent(ctx, runID, s.ID, "arbiter", s.Join.Agent, join.ResolveConflictPrompt(conflict.Paths), workDir, next, inputs, "")
 	if err != nil {
-		e.transition(ctx, runID, stepState(runID, s.ID, core.StepFailed, next, workDir, core.Result{}, err),
+		// best-effort: already on failure path.
+		_ = e.transition(ctx, runID, stepState(runID, s.ID, core.StepFailed, next, workDir, core.Result{}, err),
 			event.Event{StepID: s.ID, Kind: event.StepFailed, Attempt: next, Err: err.Error()})
 		return core.Result{}, err
 	}
 	// A botched resolution (markers still present) fails before the human reviews it,
 	// so we never ask for approval of — or commit — an unresolved merge.
 	if rerr := join.EnsureResolved(ctx, workDir); rerr != nil {
-		e.transition(ctx, runID, stepState(runID, s.ID, core.StepFailed, next, workDir, core.Result{}, rerr),
+		// best-effort: already on failure path.
+		_ = e.transition(ctx, runID, stepState(runID, s.ID, core.StepFailed, next, workDir, core.Result{}, rerr),
 			event.Event{StepID: s.ID, Kind: event.StepFailed, Attempt: next, Err: rerr.Error()})
 		return core.Result{}, rerr
 	}
 
 	// Rung 2: human reviews the resolution.
-	e.transition(ctx, runID, stepState(runID, s.ID, core.StepAwaitingGate, next, workDir, core.Result{}, conflict),
+	// best-effort: intermediate awaiting state; a persist error is surfaced via synthetic publish.
+	_ = e.transition(ctx, runID, stepState(runID, s.ID, core.StepAwaitingGate, next, workDir, core.Result{}, conflict),
 		event.Event{StepID: s.ID, Kind: event.GateAwaiting, Attempt: next, Err: conflict.Error()})
 	e.Metrics.GateAwaited()
 	ok, err := e.Gate.Escalate(ctx, runID, s, core.Result{})
 	if err != nil {
-		e.transition(ctx, runID, stepState(runID, s.ID, core.StepFailed, next, workDir, core.Result{}, err),
+		// best-effort: already on failure path.
+		_ = e.transition(ctx, runID, stepState(runID, s.ID, core.StepFailed, next, workDir, core.Result{}, err),
 			event.Event{StepID: s.ID, Kind: event.StepFailed, Attempt: next, Err: err.Error()})
 		return core.Result{}, err
 	}
 	if !ok {
 		rej := fmt.Errorf("escalated merge conflict rejected")
-		e.transition(ctx, runID, stepState(runID, s.ID, core.StepFailed, next, workDir, core.Result{}, rej),
+		// best-effort: already on failure path.
+		_ = e.transition(ctx, runID, stepState(runID, s.ID, core.StepFailed, next, workDir, core.Result{}, rej),
 			event.Event{StepID: s.ID, Kind: event.StepFailed, Attempt: next, Err: rej.Error()})
 		return core.Result{}, rej
 	}
@@ -734,7 +768,8 @@ func (e *Engine) resolveConflictEscalation(ctx context.Context, runID core.RunID
 	// Approved: finalize the resolved worktree, concluding the in-progress merge of
 	// THIS conflicting branch. Branches after it in the merge order are not yet merged.
 	if _, _, cerr := e.WS.Commit(ctx, runID, s, workDir); cerr != nil {
-		e.transition(ctx, runID, stepState(runID, s.ID, core.StepFailed, next, workDir, core.Result{}, cerr),
+		// best-effort: already on failure path.
+		_ = e.transition(ctx, runID, stepState(runID, s.ID, core.StepFailed, next, workDir, core.Result{}, cerr),
 			event.Event{StepID: s.ID, Kind: event.StepFailed, Attempt: next, Err: cerr.Error()})
 		return core.Result{}, cerr
 	}
@@ -747,7 +782,8 @@ func (e *Engine) resolveConflictEscalation(ctx context.Context, runID core.RunID
 	// still accrues it; a further conflict re-enters resolveConflictEscalation, which
 	// re-carries the next arbiter's cost on top.
 	resume := attemptNum + 2
-	e.transition(ctx, runID, stepState(runID, s.ID, core.StepRunning, resume, workDir, core.Result{}, nil),
+	// best-effort: intermediate Running state; a persist error is surfaced via synthetic publish.
+	_ = e.transition(ctx, runID, stepState(runID, s.ID, core.StepRunning, resume, workDir, core.Result{}, nil),
 		event.Event{StepID: s.ID, Kind: event.StepStarted, Attempt: resume})
 	// gateFailed is intentionally ignored: a resumed join's gate failure is terminal
 	// (no nested gate escalation), and a fresh conflict surfaces as a *ConflictError.
@@ -762,15 +798,19 @@ func (e *Engine) resolveConflictEscalation(ctx context.Context, runID core.RunID
 			rres.CostUSD += ares.CostUSD // accumulate this rung's arbiter cost across the ladder
 			return rres, rerr
 		}
-		e.transition(ctx, runID, stepState(runID, s.ID, core.StepFailed, resume, workDir, core.Result{}, execErr),
+		// best-effort: already on failure path.
+		_ = e.transition(ctx, runID, stepState(runID, s.ID, core.StepFailed, resume, workDir, core.Result{}, execErr),
 			event.Event{StepID: s.ID, Kind: event.StepFailed, Attempt: resume, Err: execErr.Error()})
 		return core.Result{}, execErr
 	}
 	res.StepID = s.ID
 	res.Summary = "merge conflict resolved (arbiter + human)"
 	res.CostUSD += ares.CostUSD // carry the arbiter's resolution cost on top of the resumed merge's
-	e.transition(ctx, runID, stepState(runID, s.ID, core.StepSucceeded, resume, workDir, res, nil),
-		event.Event{StepID: s.ID, Kind: event.StepDone, Summary: res.Summary, CostUSD: res.CostUSD, Attempt: resume})
+	// Critical: a persist failure on the terminal-success transition must not silently succeed.
+	if perr := e.transition(ctx, runID, stepState(runID, s.ID, core.StepSucceeded, resume, workDir, res, nil),
+		event.Event{StepID: s.ID, Kind: event.StepDone, Summary: res.Summary, CostUSD: res.CostUSD, Attempt: resume}); perr != nil {
+		return core.Result{}, perr
+	}
 	return res, nil
 }
 

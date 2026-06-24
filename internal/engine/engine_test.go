@@ -288,6 +288,41 @@ func TestTransitionDoesNotPublishOriginalOnStoreError(t *testing.T) {
 	}
 }
 
+// TestStepSuccessTransitionPersistFailureFails asserts that when the store
+// rejects the StepSucceeded persist, eng.Run returns a non-nil error (the run
+// fails) rather than silently reporting success.
+func TestStepSuccessTransitionPersistFailureFails(t *testing.T) {
+	f := &flow.Flow{Name: "persist-fail", Steps: []*flow.Step{
+		{ID: "a", Agent: "mock", Gate: flow.Gate{Policy: flow.GateManual}},
+	}}
+	if err := flow.Validate(f); err != nil {
+		t.Fatalf("flow invalid: %v", err)
+	}
+
+	bus := event.NewBus()
+	eng := &Engine{
+		Execs: mocks(),
+		WS:    &workspace.Manager{Root: t.TempDir()},
+		Gate:  &gate.Evaluator{Approver: gate.AutoApprover{}, Verifier: gate.CommandVerifier{}},
+		Joins: join.Default(),
+		Store: failingStore{store.NewMem()},
+		Bus:   bus,
+		Sem:   nil,
+		Clock: core.SystemClock{},
+	}
+	// failingStore.CreateRun is not overridden, so seed via the inner store.
+	inner := store.NewMem()
+	if err := inner.CreateRun(context.Background(), core.RunState{ID: "r1", Name: f.Name, Status: core.RunPending}); err != nil {
+		t.Fatal(err)
+	}
+	eng.Store = failingStore{inner}
+
+	err := eng.Run(context.Background(), "r1", f)
+	if err == nil {
+		t.Fatal("eng.Run returned nil; want non-nil error because the StepSucceeded persist failed")
+	}
+}
+
 // recordingClock records each duration passed to After (which fires immediately,
 // so tests never sleep) — used to assert the exact backoff schedule.
 type recordingClock struct{ durs []time.Duration }

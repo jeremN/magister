@@ -11,6 +11,8 @@ import (
 	"net/url"
 	"os"
 	"time"
+
+	"concentus/internal/tui"
 )
 
 // approve retry window for the transient 409 a resumed run briefly returns before
@@ -30,7 +32,7 @@ func main() {
 
 func dispatch(args []string, base string, out io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(out, "usage: cm <run|ls|get|watch|approve|reject|cancel|retry|push|pr|ship|gc|rm|loglevel> ...")
+		fmt.Fprintln(out, "usage: cm <run|ls|get|watch|approve|reject|cancel|retry|push|pr|ship|gc|rm|loglevel|tui> ...")
 		return 2
 	}
 	c := &client{
@@ -83,6 +85,12 @@ func dispatch(args []string, base string, out io.Writer) int {
 		return c.ship(args[1:], out)
 	case "loglevel":
 		return c.loglevel(args[1:], out)
+	case "tui":
+		if err := tui.Run(base, os.Getenv("MAGISTER_BEARER_TOKEN")); err != nil {
+			fmt.Fprintln(os.Stderr, "tui:", err)
+			return 1
+		}
+		return 0
 	default:
 		fmt.Fprintf(out, "unknown command %q\n", args[0])
 		return 2

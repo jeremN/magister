@@ -22,28 +22,28 @@ func (e *Evaluator) Escalate(ctx context.Context, runID core.RunID, s *flow.Step
 	return e.Approver.Approve(ctx, runID, s, res)
 }
 
-func (e *Evaluator) Evaluate(ctx context.Context, runID core.RunID, s *flow.Step, res core.Result, workDir string) (bool, error) {
+func (e *Evaluator) Evaluate(ctx context.Context, runID core.RunID, s *flow.Step, res core.Result, workDir string) (bool, string, error) {
 	switch s.Gate.Policy {
 	case "", flow.GateManual:
-		// manual (and the empty default) block on a human approval.
-		return e.Approver.Approve(ctx, runID, s, res)
+		ok, err := e.Approver.Approve(ctx, runID, s, res)
+		return ok, "", err
 	case flow.GateConditional:
-		// conditional resolves synchronously from the compiled expr (like auto).
 		env := flow.GateEnv{Result: flow.GateResult{
 			Summary:   res.Summary,
 			CostUSD:   res.CostUSD,
 			Artifacts: artifactPaths(res.Artifacts),
 			StepID:    res.StepID,
 		}}
-		return s.Gate.Condition.Eval(env)
+		ok, err := s.Gate.Condition.Eval(env)
+		return ok, "", err
 	case flow.GateAuto:
-		ok, err := e.Verifier.Verify(ctx, s.Gate.Verifier.Command, workDir)
+		ok, output, err := e.Verifier.Verify(ctx, s.Gate.Verifier.Command, workDir)
 		if err != nil {
-			return false, fmt.Errorf("verifier error: %w", err)
+			return false, "", fmt.Errorf("verifier error: %w", err)
 		}
-		return ok, nil
+		return ok, output, nil
 	default:
-		return false, fmt.Errorf("step %q: unknown gate policy %q", s.ID, s.Gate.Policy)
+		return false, "", fmt.Errorf("step %q: unknown gate policy %q", s.ID, s.Gate.Policy)
 	}
 }
 

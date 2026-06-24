@@ -8,7 +8,7 @@ import (
 
 // Verifier resolves an auto gate by running a check.
 type Verifier interface {
-	Verify(ctx context.Context, command, workDir string) (bool, error)
+	Verify(ctx context.Context, command, workDir string) (ok bool, output string, err error)
 }
 
 // CommandVerifier runs a shell command in the step's workspace; exit 0 = pass.
@@ -21,24 +21,40 @@ type Verifier interface {
 // package is ever extended to accept untrusted input, sanitize or re-evaluate.
 type CommandVerifier struct{}
 
-func (CommandVerifier) Verify(ctx context.Context, command, workDir string) (bool, error) {
+// maxFeedbackBytes caps the verifier output captured for agent feedback. It
+// bounds the TAIL kept; tailBytes prepends a ~15-byte truncation marker when it
+// clips, so the returned string can be up to maxFeedbackBytes + len(marker).
+const maxFeedbackBytes = 8 << 10
+
+func (CommandVerifier) Verify(ctx context.Context, command, workDir string) (bool, string, error) {
 	if command == "" {
-		return true, nil
+		return true, "", nil
 	}
 	// #nosec G204 -- command is operator-supplied config (flow YAML), not user input.
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
 	cmd.Dir = workDir
-	if err := cmd.Run(); err != nil {
+	out, err := cmd.CombinedOutput()
+	if err != nil {
 		if ctx.Err() != nil {
 			// Killed by the step timeout / cancellation — an infra error, not a
 			// gate verdict. The engine treats it as a retryable failure.
-			return false, ctx.Err()
+			return false, "", ctx.Err()
 		}
 		var exit *exec.ExitError
 		if errors.As(err, &exit) {
-			return false, nil // non-zero exit = check failed, not an infra error
+			return false, tailBytes(out, maxFeedbackBytes), nil // non-zero exit = check failed
 		}
-		return false, err
+		return false, "", err
 	}
-	return true, nil
+	return true, "", nil
+}
+
+// tailBytes returns the last n bytes of b as a string. Verifier/test output
+// prints its summary at the end, so the tail is the useful part; when b is
+// longer than n a single truncation marker is prefixed.
+func tailBytes(b []byte, n int) string {
+	if len(b) <= n {
+		return string(b)
+	}
+	return "…(truncated)\n" + string(b[len(b)-n:])
 }

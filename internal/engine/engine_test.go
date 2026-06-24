@@ -3,6 +3,7 @@ package engine
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	osexec "os/exec"
@@ -1230,5 +1231,140 @@ func TestMergeConflictEscalateRejectFails(t *testing.T) {
 	}
 	if err := eng.Run(context.Background(), "r1", conflictFlow(flow.FailEscalate)); err == nil {
 		t.Fatal("run should fail when the human rejects the conflict resolution")
+	}
+}
+
+func TestAttemptAutoGateFailureCarriesVerifierOutput(t *testing.T) {
+	e := &Engine{
+		Execs: map[string]core.Executor{"mock": executor.Mock{Name: "mock"}},
+		Gate:  &gate.Evaluator{Verifier: gate.CommandVerifier{}},
+		Store: store.NewMem(),
+		Bus:   event.NewBus(),
+		Clock: core.SystemClock{},
+	}
+	s := &flow.Step{ID: "a", Agent: "mock", Gate: flow.Gate{
+		Policy: flow.GateAuto, Verifier: &flow.Verifier{Command: `echo "verifier: boom"; exit 1`}}}
+	_, gateFailed, err := e.attempt(context.Background(), "r1", s, nil, 1, t.TempDir(), "")
+	if !gateFailed {
+		t.Fatal("want gateFailed=true on a failed auto gate")
+	}
+	var vf *gate.VerifierFailure
+	if !errors.As(err, &vf) {
+		t.Fatalf("err = %v (%T), want *gate.VerifierFailure", err, err)
+	}
+	if !strings.Contains(vf.Output, "verifier: boom") {
+		t.Errorf("vf.Output = %q, want the verifier stdout", vf.Output)
+	}
+	if vf.Command != `echo "verifier: boom"; exit 1` {
+		t.Errorf("vf.Command = %q", vf.Command)
+	}
+}
+
+// selfRepairExec writes verifier-failing content until it receives feedback,
+// then writes passing content, recording the Feedback it saw on each call.
+type selfRepairExec struct {
+	mu       sync.Mutex
+	feedback []string
+}
+
+func (e *selfRepairExec) Run(_ context.Context, t core.Task) (core.Result, error) {
+	e.mu.Lock()
+	e.feedback = append(e.feedback, t.Feedback)
+	e.mu.Unlock()
+	marker := "BAD"
+	if t.Feedback != "" {
+		marker = "GOOD"
+	}
+	p := filepath.Join(t.WorkDir, "result.txt")
+	if err := os.WriteFile(p, []byte(marker+"\n"), 0o644); err != nil {
+		return core.Result{}, err
+	}
+	return core.Result{StepID: t.StepID, Summary: "wrote " + marker,
+		Artifacts: []core.Artifact{{StepID: t.StepID, Path: p}}}, nil
+}
+
+func TestSelfRepairFeedsVerifierOutputToRetry(t *testing.T) {
+	sr := &selfRepairExec{}
+	st := store.NewMem()
+	e := &Engine{
+		Execs: map[string]core.Executor{"repair": sr},
+		WS:    &workspace.Manager{Root: t.TempDir()},
+		Gate:  &gate.Evaluator{Approver: gate.AutoApprover{}, Verifier: gate.CommandVerifier{}},
+		Joins: join.Default(),
+		Store: st, Bus: event.NewBus(), Clock: fakeClock{},
+	}
+	// Verifier passes only when result.txt contains GOOD; on failure it prints to stdout.
+	cmd := `if grep -q GOOD result.txt 2>/dev/null; then exit 0; else echo "verifier: result.txt missing GOOD marker"; exit 1; fi`
+	f := &flow.Flow{Name: "selfrepair", Steps: []*flow.Step{
+		{ID: "a", Agent: "repair", Retry: &flow.RetryPolicy{Max: 2, Backoff: flow.Duration(time.Second)},
+			Gate: flow.Gate{Policy: flow.GateAuto, Verifier: &flow.Verifier{Command: cmd}, OnFail: flow.FailRetry}},
+	}}
+	mustCreate(t, st, "r1", f)
+	if err := e.Run(context.Background(), "r1", f); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	got, _ := st.GetRun(context.Background(), "r1")
+	if got.Steps[0].Status != core.StepSucceeded {
+		t.Fatalf("step status = %q, want succeeded", got.Steps[0].Status)
+	}
+	sr.mu.Lock()
+	defer sr.mu.Unlock()
+	if len(sr.feedback) != 2 {
+		t.Fatalf("executor called %d times, want 2", len(sr.feedback))
+	}
+	if sr.feedback[0] != "" {
+		t.Errorf("attempt 1 feedback = %q, want empty", sr.feedback[0])
+	}
+	if !strings.Contains(sr.feedback[1], "missing GOOD marker") {
+		t.Errorf("attempt 2 feedback = %q, want the verifier stdout", sr.feedback[1])
+	}
+}
+
+// recordingFlaky errors on the first call (an execution error, not a gate
+// failure) then succeeds, recording the Feedback seen on each call.
+type recordingFlaky struct {
+	mu       sync.Mutex
+	calls    int
+	feedback []string
+}
+
+func (r *recordingFlaky) Run(_ context.Context, t core.Task) (core.Result, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls++
+	r.feedback = append(r.feedback, t.Feedback)
+	if r.calls < 2 {
+		return core.Result{}, fmt.Errorf("transient boom")
+	}
+	return core.Result{StepID: t.StepID, Summary: "ok"}, nil
+}
+
+func TestExecErrorThreadsNoFeedback(t *testing.T) {
+	rec := &recordingFlaky{}
+	st := store.NewMem()
+	e := &Engine{
+		Execs: map[string]core.Executor{"flaky": rec},
+		WS:    &workspace.Manager{Root: t.TempDir()},
+		Gate:  &gate.Evaluator{Approver: gate.AutoApprover{}, Verifier: gate.CommandVerifier{}},
+		Joins: join.Default(),
+		Store: st, Bus: event.NewBus(), Clock: fakeClock{},
+	}
+	f := &flow.Flow{Name: "execerr", Steps: []*flow.Step{
+		{ID: "a", Agent: "flaky", Retry: &flow.RetryPolicy{Max: 2, Backoff: flow.Duration(time.Second)},
+			Gate: flow.Gate{Policy: flow.GateManual}},
+	}}
+	mustCreate(t, st, "r1", f)
+	if err := e.Run(context.Background(), "r1", f); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	if len(rec.feedback) != 2 {
+		t.Fatalf("executor called %d times, want 2", len(rec.feedback))
+	}
+	for i, fb := range rec.feedback {
+		if fb != "" {
+			t.Errorf("attempt %d feedback = %q, want empty (exec errors carry no feedback)", i+1, fb)
+		}
 	}
 }

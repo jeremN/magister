@@ -730,23 +730,46 @@ func (e *Engine) resolveConflictEscalation(ctx context.Context, runID core.RunID
 		return core.Result{}, rej
 	}
 
-	// Approved: finalize the resolved worktree (concludes the merge) and build the result.
+	// Approved: finalize the resolved worktree, concluding the in-progress merge of
+	// THIS conflicting branch. Branches after it in the merge order are not yet merged.
 	if _, _, cerr := e.WS.Commit(runID, s, workDir); cerr != nil {
 		e.transition(ctx, runID, stepState(runID, s.ID, core.StepFailed, next, workDir, core.Result{}, cerr),
 			event.Event{StepID: s.ID, Kind: event.StepFailed, Attempt: next, Err: cerr.Error()})
 		return core.Result{}, cerr
 	}
-	res, rerr := join.CommittedResult(workDir, s)
-	if rerr != nil {
-		e.transition(ctx, runID, stepState(runID, s.ID, core.StepFailed, next, workDir, core.Result{}, rerr),
-			event.Event{StepID: s.ID, Kind: event.StepFailed, Attempt: next, Err: rerr.Error()})
-		return core.Result{}, rerr
+
+	// Resume merging the remaining branches. Merge.Join is idempotent — git merge of
+	// an already-merged branch is a clean no-op — so re-running it continues from the
+	// first unmerged branch. This terminates because each escalation commits at least
+	// one more branch, draining the finite branch set. The arbiter's resolution cost
+	// rides on a one-artifact carry result so a clean resume (which has no arbiter)
+	// still accrues it; a further conflict re-enters resolveConflictEscalation, which
+	// re-carries the next arbiter's cost on top.
+	resume := attemptNum + 2
+	e.transition(ctx, runID, stepState(runID, s.ID, core.StepRunning, resume, workDir, core.Result{}, nil),
+		event.Event{StepID: s.ID, Kind: event.StepStarted, Attempt: resume})
+	// gateFailed is intentionally ignored: a resumed join's gate failure is terminal
+	// (no nested gate escalation), and a fresh conflict surfaces as a *ConflictError.
+	res, _, execErr := e.attempt(ctx, runID, s, inputs, resume, workDir, "")
+	if execErr != nil {
+		// A fresh conflict on a LATER branch re-enters the escalation ladder so it is
+		// resolved too; any other failure (incl. a gate verdict on the resumed join)
+		// is terminal. escalateJoin persists the terminal disposition itself.
+		var conflict *join.ConflictError
+		if errors.As(execErr, &conflict) {
+			rres, rerr := e.escalateJoin(ctx, runID, s, inputs, workDir, execErr, resume)
+			rres.CostUSD += ares.CostUSD // accumulate this rung's arbiter cost across the ladder
+			return rres, rerr
+		}
+		e.transition(ctx, runID, stepState(runID, s.ID, core.StepFailed, resume, workDir, core.Result{}, execErr),
+			event.Event{StepID: s.ID, Kind: event.StepFailed, Attempt: resume, Err: execErr.Error()})
+		return core.Result{}, execErr
 	}
 	res.StepID = s.ID
 	res.Summary = "merge conflict resolved (arbiter + human)"
-	res.CostUSD = ares.CostUSD // carry the arbiter's resolution cost (CommittedResult has none)
-	e.transition(ctx, runID, stepState(runID, s.ID, core.StepSucceeded, next, workDir, res, nil),
-		event.Event{StepID: s.ID, Kind: event.StepDone, Summary: res.Summary, CostUSD: res.CostUSD, Attempt: next})
+	res.CostUSD += ares.CostUSD // carry the arbiter's resolution cost on top of the resumed merge's
+	e.transition(ctx, runID, stepState(runID, s.ID, core.StepSucceeded, resume, workDir, res, nil),
+		event.Event{StepID: s.ID, Kind: event.StepDone, Summary: res.Summary, CostUSD: res.CostUSD, Attempt: resume})
 	return res, nil
 }
 

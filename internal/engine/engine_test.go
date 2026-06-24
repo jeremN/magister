@@ -1234,6 +1234,64 @@ func TestMergeConflictEscalateRejectFails(t *testing.T) {
 	}
 }
 
+// TestMergeConflictEscalateResumesRemainingBranches proves that an escalation
+// which resolves the FIRST conflicting branch does not silently drop the branches
+// merged after it. Three isolated steps feed one merge join: a and b both write
+// shared.md (so b conflicts when merged after a), while c adds an independent file.
+// The arbiter resolves the a/b conflict; after the human approves, the join must
+// RESUME and merge c too — so the committed integrate tree carries all three files.
+func TestMergeConflictEscalateResumesRemainingBranches(t *testing.T) {
+	execs := map[string]core.Executor{
+		"a":       fileWriterExec{file: "shared.md", body: "A"},
+		"b":       fileWriterExec{file: "shared.md", body: "B"},
+		"c":       fileWriterExec{file: "c.md", body: "C"}, // independent file, merged AFTER the conflict
+		"arbiter": fileWriterExec{file: "shared.md", body: "RESOLVED"},
+	}
+	eng, st := newGitEngine(t, execs)
+	autoGate := flow.Gate{Policy: flow.GateAuto, Verifier: &flow.Verifier{Command: "true"}}
+	// Needs order [a,b,c] fixes the merge order: a (clean), b (conflict), c (clean).
+	f := &flow.Flow{Name: "f", Steps: []*flow.Step{
+		{ID: "a", Agent: "a", Workspace: flow.WSIsolated, Gate: autoGate},
+		{ID: "b", Agent: "b", Workspace: flow.WSIsolated, Gate: autoGate},
+		{ID: "c", Agent: "c", Workspace: flow.WSIsolated, Gate: autoGate},
+		{ID: "integrate", Needs: []string{"a", "b", "c"}, Workspace: flow.WSIsolated,
+			Join: &flow.Join{Strategy: flow.JoinMerge, Agent: "arbiter", OnConflict: flow.FailEscalate}},
+	}}
+	if err := flow.Validate(f); err != nil {
+		t.Fatalf("flow invalid: %v", err)
+	}
+	if err := st.CreateRun(context.Background(), core.RunState{ID: "r1", Name: "f", Status: core.RunPending}); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Run(context.Background(), "r1", f); err != nil {
+		t.Fatalf("run should succeed after the conflict is resolved and remaining branches resume: %v", err)
+	}
+
+	got, _ := st.GetRun(context.Background(), "r1")
+	var integrate core.StepState
+	for _, s := range got.Steps {
+		if s.StepID == "integrate" {
+			integrate = s
+		}
+	}
+	if integrate.Status != core.StepSucceeded {
+		t.Fatalf("integrate status = %q, want succeeded", integrate.Status)
+	}
+	// The committed integrate tree must carry BOTH the resolved conflict file AND
+	// branch c's independent file — c is merged only if the join resumed after the
+	// escalation. CommittedResult enumerates every tracked file as an artifact.
+	names := map[string]bool{}
+	for _, a := range integrate.Artifacts {
+		names[filepath.Base(a.Path)] = true
+	}
+	if !names["shared.md"] {
+		t.Errorf("integrate tree missing shared.md (the resolved conflict): %+v", integrate.Artifacts)
+	}
+	if !names["c.md"] {
+		t.Errorf("integrate tree missing c.md — branch c was silently dropped after the conflict: %+v", integrate.Artifacts)
+	}
+}
+
 func TestAttemptAutoGateFailureCarriesVerifierOutput(t *testing.T) {
 	e := &Engine{
 		Execs: map[string]core.Executor{"mock": executor.Mock{Name: "mock"}},

@@ -3,6 +3,7 @@ package executor
 import (
 	"bytes"
 	"context"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -201,4 +202,37 @@ func TestCLIAgentLoggerFallsBackToContext(t *testing.T) {
 func TestCLIAgentLoggerNeverNil(t *testing.T) {
 	a := &CLIAgent{}
 	a.logger(context.Background()).Info("noop") // discard logger; must not panic
+}
+
+type recordingSpec struct{ gotPrompt string }
+
+func (s *recordingSpec) Args(model, prompt string) []string { s.gotPrompt = prompt; return nil }
+func (s *recordingSpec) Parse(io.Reader, func(event.Event)) (string, float64, error) {
+	return "ok", 0, nil
+}
+
+func TestPromptWithFeedbackEmptyIsIdentity(t *testing.T) {
+	if got := promptWithFeedback("do the work", ""); got != "do the work" {
+		t.Errorf("empty feedback must not change the prompt, got %q", got)
+	}
+}
+
+func TestCLIAgentRunIncludesFeedbackInPrompt(t *testing.T) {
+	spec := &recordingSpec{}
+	a := &CLIAgent{Bin: stubPath(t, "fake-claude-ok"), Model: "opus", Spec: spec}
+	_, err := a.Run(context.Background(), core.Task{
+		StepID: "s1", Prompt: "do the work", Feedback: "verifier: missing GOOD marker", WorkDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if !strings.Contains(spec.gotPrompt, "do the work") {
+		t.Errorf("prompt lost the original task: %q", spec.gotPrompt)
+	}
+	if !strings.Contains(spec.gotPrompt, "Previous attempt failed verification") {
+		t.Errorf("prompt missing the feedback heading: %q", spec.gotPrompt)
+	}
+	if !strings.Contains(spec.gotPrompt, "verifier: missing GOOD marker") {
+		t.Errorf("prompt missing the verifier output: %q", spec.gotPrompt)
+	}
 }

@@ -49,7 +49,7 @@ func (a *CLIAgent) logger(ctx context.Context) *slog.Logger {
 func (a *CLIAgent) Run(ctx context.Context, t core.Task) (core.Result, error) {
 	// #nosec G204 -- Bin + args are operator-controlled (daemon registry + flow YAML);
 	// no shell. Running a coding-agent CLI is the intended capability.
-	cmd := exec.CommandContext(ctx, a.Bin, a.Spec.Args(a.Model, t.Prompt)...) // nosemgrep: go.lang.security.audit.dangerous-exec-command.dangerous-exec-command
+	cmd := exec.CommandContext(ctx, a.Bin, a.Spec.Args(a.Model, promptWithFeedback(t.Prompt, t.Feedback))...) // nosemgrep: go.lang.security.audit.dangerous-exec-command.dangerous-exec-command
 	cmd.Dir = t.WorkDir
 	if a.Env != nil {
 		cmd.Env = a.Env
@@ -99,4 +99,17 @@ func (a *CLIAgent) Run(ctx context.Context, t core.Task) (core.Result, error) {
 		arts[i].StepID = t.StepID
 	}
 	return core.Result{StepID: t.StepID, Summary: summary, Artifacts: arts, CostUSD: cost}, nil
+}
+
+// promptWithFeedback appends the previous attempt's verifier output to the prompt
+// on a retry, so the agent can fix the specific failure. Empty feedback (the
+// first attempt) returns the prompt unchanged.
+func promptWithFeedback(prompt, feedback string) string {
+	if feedback == "" {
+		return prompt
+	}
+	return prompt +
+		"\n\n## Previous attempt failed verification\n" +
+		"The verifier for this step failed. Fix the problems shown below, then redo the work.\n\n" +
+		"```\n" + feedback + "\n```\n"
 }

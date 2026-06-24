@@ -1125,6 +1125,78 @@ func TestIsolatedStepCommitsAndStampsRefs(t *testing.T) {
 	}
 }
 
+// TestIsolatedStepArtifactAliasingRace is a -race regression test for the
+// store.Mem artifact-aliasing bug: SaveStepTransition previously stored the
+// caller's Artifacts slice directly, so commitIsolated's in-place branch/commit
+// stamp raced with a concurrent GetRun's cloneRun. The fix was a write-side
+// cloneArtifacts in SaveStepTransition; this test would catch a regression.
+//
+// Strategy: run an isolated step (which triggers commitIsolated → in-place
+// branch/commit stamp) while concurrently polling GetRun from multiple
+// goroutines. Under -race this surfaces any shared-slice write/read conflict.
+func TestIsolatedStepArtifactAliasingRace(t *testing.T) {
+	execs := map[string]core.Executor{
+		"writer": fileWriterExec{file: "out.txt", body: "data"},
+	}
+	eng, st := newGitEngine(t, execs)
+	f := &flow.Flow{Name: "f", Steps: []*flow.Step{
+		{ID: "a", Agent: "writer", Workspace: flow.WSIsolated,
+			Gate: flow.Gate{Policy: flow.GateAuto, Verifier: &flow.Verifier{Command: "true"}}},
+	}}
+	if err := st.CreateRun(context.Background(), core.RunState{ID: "r1", Name: "f", Status: core.RunPending}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Spawn goroutines that poll GetRun concurrently while the engine runs.
+	// They read .Steps[*].Artifacts, which commitIsolated stamps in-place; under
+	// the old bug this was a data race. Goroutines stop once done is closed.
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-done:
+					return
+				default:
+					rs, _ := st.GetRun(context.Background(), "r1")
+					for _, step := range rs.Steps {
+						// Access artifact fields to exercise the read side
+						// of the formerly-aliased slice.
+						for _, a := range step.Artifacts {
+							_ = a.Branch
+							_ = a.Commit
+						}
+					}
+				}
+			}
+		}()
+	}
+
+	if err := eng.Run(context.Background(), "r1", f); err != nil {
+		close(done)
+		wg.Wait()
+		t.Fatalf("run: %v", err)
+	}
+	close(done)
+	wg.Wait()
+
+	// Confirm the step succeeded and artifacts were stamped.
+	got, _ := st.GetRun(context.Background(), "r1")
+	if got.Status != core.RunSucceeded {
+		t.Fatalf("run status = %q, want succeeded", got.Status)
+	}
+	if len(got.Steps) == 0 || len(got.Steps[0].Artifacts) == 0 {
+		t.Fatalf("no artifacts on isolated step: %+v", got.Steps)
+	}
+	a := got.Steps[0].Artifacts[0]
+	if a.Branch != "step/a" || a.Commit == "" {
+		t.Errorf("artifact not stamped: branch=%q commit=%q", a.Branch, a.Commit)
+	}
+}
+
 func TestJoinConflictEscalateRejectAborts(t *testing.T) {
 	st := store.NewMem()
 	e := &Engine{

@@ -42,6 +42,7 @@ func (Synthesize) Join(ctx context.Context, s *flow.Step, inputs []core.Artifact
 			return core.Result{}, fmt.Errorf("synthesize: arbiter left conflicts in %v: %w", conflicted, err)
 		}
 		if _, err := gitCmd(ctx, workDir, "commit", "--no-edit"); err != nil {
+			_, _ = gitCmd(ctx, workDir, "merge", "--abort")
 			return core.Result{}, fmt.Errorf("synthesize: commit after resolving %s: %w", br, err)
 		}
 	}

@@ -6,6 +6,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -19,6 +20,7 @@ type Mem struct {
 	mu        sync.Mutex
 	runs      map[core.RunID]*core.RunState
 	events    map[core.RunID][]event.Event
+	createdAt map[core.RunID]time.Time
 	updatedAt map[core.RunID]time.Time
 	reclaimed map[core.RunID]bool
 	seq       int64
@@ -28,6 +30,7 @@ func NewMem() *Mem {
 	return &Mem{
 		runs:      make(map[core.RunID]*core.RunState),
 		events:    make(map[core.RunID][]event.Event),
+		createdAt: make(map[core.RunID]time.Time),
 		updatedAt: make(map[core.RunID]time.Time),
 		reclaimed: make(map[core.RunID]bool),
 	}
@@ -41,7 +44,9 @@ func (m *Mem) CreateRun(_ context.Context, r core.RunState) error {
 	}
 	cp := r
 	m.runs[r.ID] = &cp
-	m.updatedAt[r.ID] = time.Now()
+	now := time.Now()
+	m.createdAt[r.ID] = now
+	m.updatedAt[r.ID] = now
 	return nil
 }
 
@@ -156,6 +161,15 @@ func (m *Mem) ListRuns(_ context.Context, f core.Filter) ([]core.RunSummary, err
 		}
 		out = append(out, core.RunSummary{ID: r.ID, Name: r.Name, Status: r.Status})
 	}
+	// Mirror SQLite's ORDER BY created_at DESC, id (ASC) so the in-memory double
+	// returns results in the same deterministic order as the production store.
+	sort.Slice(out, func(i, j int) bool {
+		ci, cj := m.createdAt[out[i].ID], m.createdAt[out[j].ID]
+		if !ci.Equal(cj) {
+			return ci.After(cj) // created_at DESC
+		}
+		return out[i].ID < out[j].ID // id ASC (tie-break)
+	})
 	return out, nil
 }
 
@@ -178,10 +192,11 @@ func isTerminal(s core.RunStatus) bool {
 func (m *Mem) MarkReclaimed(_ context.Context, id core.RunID) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.runs[id]; !ok {
-		return fmt.Errorf("unknown run %q", id)
+	// Mirror SQLite's behaviour: an UPDATE on a missing id affects 0 rows and
+	// returns no error. Mark only if the run is present; otherwise no-op.
+	if _, ok := m.runs[id]; ok {
+		m.reclaimed[id] = true
 	}
-	m.reclaimed[id] = true
 	return nil
 }
 

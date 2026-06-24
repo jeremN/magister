@@ -245,6 +245,51 @@ func TestMemMarkReclaimedExcludesFromReclaimable(t *testing.T) {
 	}
 }
 
+// TestMemMarkReclaimedMissingRunIsNoOp asserts that MarkReclaimed on a run that
+// does not exist returns nil (no error), mirroring SQLite's 0-row UPDATE behaviour.
+func TestMemMarkReclaimedMissingRunIsNoOp(t *testing.T) {
+	ctx := context.Background()
+	st := NewMem()
+	if err := st.MarkReclaimed(ctx, "does-not-exist"); err != nil {
+		t.Errorf("MarkReclaimed missing run: got %v, want nil", err)
+	}
+}
+
+// TestMemListRunsOrderedByCreatedAtDescThenID asserts that ListRuns returns runs
+// sorted newest-created first, with ties broken by ID ascending — matching
+// SQLite's ORDER BY created_at DESC, id.
+func TestMemListRunsOrderedByCreatedAtDescThenID(t *testing.T) {
+	ctx := context.Background()
+	st := NewMem()
+
+	// Create three runs in known order. We sleep a tiny bit so their createdAt
+	// timestamps are distinct and the DESC ordering is unambiguous.
+	ids := []core.RunID{"alpha", "beta", "gamma"}
+	for _, id := range ids {
+		if err := st.CreateRun(ctx, core.RunState{ID: id, Status: core.RunPending}); err != nil {
+			t.Fatal(err)
+		}
+		// Ensure distinct timestamps even on a coarse clock.
+		time.Sleep(time.Millisecond)
+	}
+
+	got, err := st.ListRuns(ctx, core.Filter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("want 3 summaries, got %d", len(got))
+	}
+	// Newest created = gamma (last inserted), oldest = alpha.
+	// Expected order: gamma, beta, alpha (created_at DESC).
+	want := []core.RunID{"gamma", "beta", "alpha"}
+	for i, s := range got {
+		if s.ID != want[i] {
+			t.Errorf("position %d: got %q, want %q (full order: %v)", i, s.ID, want[i], got)
+		}
+	}
+}
+
 func TestMemPing(t *testing.T) {
 	if err := NewMem().Ping(context.Background()); err != nil {
 		t.Fatalf("Mem.Ping = %v, want nil", err)

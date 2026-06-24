@@ -70,7 +70,9 @@ type Store interface {
 	// find runs whose scratch is past its retention TTL.
 	ReclaimableRuns(ctx context.Context, before time.Time) ([]RunID, error)
 	// MarkReclaimed records that a run's scratch has been reclaimed, so
-	// ReclaimableRuns never selects it again. Idempotent. The run must exist.
+	// ReclaimableRuns never selects it again. Idempotent. Marking a run that does
+	// not exist (or has already been reclaimed) is a no-op, not an error —
+	// mirroring SQLite's 0-row UPDATE behaviour.
 	MarkReclaimed(ctx context.Context, id RunID) error
 	// Ping verifies the store backend is reachable. The readiness probe uses it.
 	Ping(ctx context.Context) error

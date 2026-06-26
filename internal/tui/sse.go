@@ -12,6 +12,16 @@ import (
 	"concentus/internal/event"
 )
 
+// streamStatusError signals a non-2xx HTTP response from the events endpoint —
+// the server is up but deliberately refusing this stream (404 gone, 5xx broken).
+// streamLoop treats it as permanent and stops reconnecting, unlike a transport
+// error or a clean EOF, which remain retryable.
+type streamStatusError struct{ Status int }
+
+func (e *streamStatusError) Error() string {
+	return "events stream: HTTP " + strconv.Itoa(e.Status)
+}
+
 // parseEvents reads the SSE framing (`id:`/`event:`/`data:` lines, blank line
 // terminates a frame) and calls emit for each event whose data decodes. It
 // returns nil at clean EOF.
@@ -58,5 +68,8 @@ func (c *Client) StreamEvents(ctx context.Context, id string, lastSeq int64, emi
 		return err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		return &streamStatusError{Status: resp.StatusCode}
+	}
 	return parseEvents(resp.Body, emit)
 }

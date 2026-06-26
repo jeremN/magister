@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -43,5 +44,27 @@ func TestStreamEventsSendsLastEventIDAndAuth(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].Kind != "run.done" {
 		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestStreamEventsNon2xxReturnsTypedErrorWithoutEmitting(t *testing.T) {
+	for _, code := range []int{http.StatusNotFound, http.StatusInternalServerError} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, `{"error":"nope"}`, code)
+		}))
+		var emitted int
+		err := NewClient(srv.URL, "").StreamEvents(context.Background(), "a1", 0, func(event.Event) { emitted++ })
+		srv.Close()
+
+		var se *streamStatusError
+		if !errors.As(err, &se) {
+			t.Fatalf("code %d: err = %v, want *streamStatusError", code, err)
+		}
+		if se.Status != code {
+			t.Fatalf("Status = %d, want %d", se.Status, code)
+		}
+		if emitted != 0 {
+			t.Fatalf("emit called %d times on a non-2xx, want 0", emitted)
+		}
 	}
 }

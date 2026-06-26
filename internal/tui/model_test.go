@@ -182,3 +182,17 @@ func TestQuitKey(t *testing.T) {
 		t.Fatal("q must request quit")
 	}
 }
+
+// A redraw (e.g. on terminal resize) must force a render without touching the
+// connection indicator — only the poll loop owns conn. Regression guard for the
+// SIGWINCH-sends-connMsg(true) false-"connected" flip.
+func TestRedrawMsgPreservesConnAndEmitsNoCommands(t *testing.T) {
+	m := model{conn: false}
+	got, cmds := update(m, redrawMsg{})
+	if got.conn {
+		t.Fatalf("redrawMsg changed conn to true, want false")
+	}
+	if cmds != nil {
+		t.Fatalf("redrawMsg emitted commands %v, want none", cmds)
+	}
+}

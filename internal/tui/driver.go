@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/signal"
 	"syscall"
@@ -123,7 +124,7 @@ func Run(base, token string) error {
 			case <-ctx.Done():
 				return
 			case <-winch:
-				trySend(msgs, connMsg(true)) // benign message to trigger a re-render
+				trySend(msgs, redrawMsg{}) // force a re-render without touching conn
 			}
 		}
 	}()
@@ -154,16 +155,22 @@ func trySend(ch chan any, m any) {
 	}
 }
 
-// streamLoop keeps the per-run SSE stream open, reconnecting until fctx ends.
+// streamLoop keeps the per-run SSE stream open, reconnecting until ctx ends.
+// A non-2xx response (run gone / server refusing) is permanent — stop, don't
+// hammer-reconnect. Transport errors and clean EOF remain retryable.
 func streamLoop(ctx context.Context, c *Client, id string, msgs chan any) {
 	var last int64
 	for ctx.Err() == nil {
-		_ = c.StreamEvents(ctx, id, last, func(e event.Event) {
+		err := c.StreamEvents(ctx, id, last, func(e event.Event) {
 			if e.Seq > last {
 				last = e.Seq
 			}
 			trySend(msgs, sseEvent(e))
 		})
+		var se *streamStatusError
+		if errors.As(err, &se) {
+			return
+		}
 		select {
 		case <-ctx.Done():
 			return

@@ -1,18 +1,16 @@
-# Handoff — `cm tui` driver hardening: DONE + REVIEWED + PUSHED, PR #1 OPEN (2026-06-26)
+# Handoff — `cm tui` driver hardening: MERGED to main (PR #1), TTY smoke still UNRUN (2026-06-26)
 
-**Start here next session.** The **`cm tui` driver-hardening slice is code-complete, reviewed clean (Opus: ready-to-merge YES), fully `-race` green, PUSHED to origin, and open as a code-only PR.** The initial push was blocked earlier in the day (github.com offline / DNS dead), then **retried successfully once connectivity returned**. Remaining: **merge PR #1 on GitHub** (user's action), then run the still-unrun **manual TTY smoke** (the user's stated next step: "driver slice first, then drive the tty smoke").
+**Start here next session.** The **`cm tui` driver-hardening slice is DONE and MERGED.** Code-complete, Opus-reviewed (ready-to-merge YES), full `-race` green, pushed, **PR #1 merged into origin/main**, and **local `main` reconciled**. (The initial push was blocked earlier in the day by an offline/DNS-dead github, then retried OK.) The ONLY remaining item is the still-unrun **manual TTY smoke** (the user's stated next step: "driver slice first, then drive the tty smoke") — it needs a human at a real terminal — plus optional worktree cleanup.
 
-- **PR:** https://github.com/jeremN/magister/pull/1 — `fix(tui): driver hardening — redraw message + bounded SSE reconnect`, base `main`, head `tui-driver-hardening`, diff = the 2 code commits (origin/main == branch base 15eee70).
-- After PR #1 merges, origin/main gets the code; local `main` still carries the spec/plan/handoff (unpushed) — reconcile with a normal `git pull` (clean, disjoint files, no duplication).
+- **PR #1 MERGED:** https://github.com/jeremN/magister/pull/1 — merge commit `ebd2e9d` on origin/main (`15eee70..ebd2e9d`).
+- **Local `main` reconciled** at merge commit `d0a2801` (= origin/main's code merge + the local spec/plan/handoff doc commits). Merged `main` re-verified: `go build ./...` clean, `go test ./internal/tui/` green.
+- Local `main` is now AHEAD of origin/main by the doc commits (spec `55d3d71`, plan `284e11e`, handoffs `70ce7f8`/`d59af03`, + the reconcile merge) — these stay unpushed unless the user explicitly pushes `main` (a direct push to the default branch is harness-gated and needs an explicit user "push").
 
-## Resume (PR is already open)
+## Resume (slice is merged — only the smoke + cleanup remain)
 
-1. **Merge PR #1** on GitHub (or `gh pr merge 1 --merge`).
-2. Reconcile local `main`: `git -C <main-checkout> pull` (brings in the merged code; local main's spec/plan/handoff stay). Optionally push local `main`'s doc commits — note: a direct push to the default branch is harness-gated, needs an explicit user "push".
-3. Run the **manual TTY smoke** (recipe below) and record the result.
-4. Clean up: `ExitWorktree` (or `git worktree remove .claude/worktrees/tui-driver-hardening` + `git branch -D worktree-tui-driver-hardening`) once the PR is merged and the smoke passes.
-
-The original push/PR commands (for reference): `git push -u origin worktree-tui-driver-hardening:tui-driver-hardening`, then `gh pr create --base main --head tui-driver-hardening …` — both DONE.
+1. Run the **manual TTY smoke** (recipe below) and record the result.
+2. Clean up the worktree: `ExitWorktree` (or `git worktree remove .claude/worktrees/tui-driver-hardening` + `git branch -D worktree-tui-driver-hardening`) — the branch is fully merged, so this is safe whenever convenient. The smoke can run from the main checkout (`cm tui` built from `main`); the worktree is no longer required.
+3. (Optional) push local `main`'s doc commits to origin — needs an explicit user "push".
 
 ## Branch / commit state
 

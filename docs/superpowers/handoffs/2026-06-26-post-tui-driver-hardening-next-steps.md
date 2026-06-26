@@ -1,27 +1,24 @@
-# Handoff — `cm tui` driver hardening: MERGED to main (PR #1), TTY smoke still UNRUN (2026-06-26)
+# Handoff — `cm tui` driver hardening: MERGED + worktree cleaned; ONLY the manual TTY smoke remains (resume next week, 2026-06-26)
 
-**Start here next session.** The **`cm tui` driver-hardening slice is DONE and MERGED.** Code-complete, Opus-reviewed (ready-to-merge YES), full `-race` green, pushed, **PR #1 merged into origin/main**, and **local `main` reconciled**. (The initial push was blocked earlier in the day by an offline/DNS-dead github, then retried OK.) The ONLY remaining item is the still-unrun **manual TTY smoke** (the user's stated next step: "driver slice first, then drive the tty smoke") — it needs a human at a real terminal — plus optional worktree cleanup.
+**Start here next week.** The **`cm tui` driver-hardening slice is DONE, MERGED, and the worktree is cleaned up.** Code-complete, Opus-reviewed (ready-to-merge YES), full `-race` green, **PR #1 merged into origin/main**, **local `main` reconciled**, and the `worktree-tui-driver-hardening` worktree+branch **removed**. The single remaining item is the **manual TTY smoke** — it needs a human at a real terminal (a headless agent cannot drive raw mode). The smoke was *staged* on 2026-06-26 (daemon + two parked runs) but **the user left before driving it**; that staging is ephemeral and will NOT survive to next week, so **re-stage from scratch using the verified recipe below**.
 
 - **PR #1 MERGED:** https://github.com/jeremN/magister/pull/1 — merge commit `ebd2e9d` on origin/main (`15eee70..ebd2e9d`).
-- **Local `main` reconciled** at merge commit `d0a2801` (= origin/main's code merge + the local spec/plan/handoff doc commits). Merged `main` re-verified: `go build ./...` clean, `go test ./internal/tui/` green.
-- Local `main` is now AHEAD of origin/main by the doc commits (spec `55d3d71`, plan `284e11e`, handoffs `70ce7f8`/`d59af03`, + the reconcile merge) — these stay unpushed unless the user explicitly pushes `main` (a direct push to the default branch is harness-gated and needs an explicit user "push").
+- **Local `main` reconciled** then carried further handoff commits; current local-`main` tip is the "PR #1 merged" handoff commit (`fc90244`) plus this update. Merged `main` re-verified: `go build ./...` clean, `go test ./internal/tui/` green (and `redrawMsg`/`streamStatusError` confirmed present on `main`).
+- Local `main` is AHEAD of origin/main by the doc commits (spec `55d3d71`, plan `284e11e`, the handoffs, + the reconcile merge `d0a2801`) — these stay unpushed unless the user explicitly pushes `main` (a direct push to the default branch is harness-gated and needs an explicit user "push").
 
-## Resume (slice is merged — only the smoke + cleanup remain)
+## Resume (slice merged + worktree cleaned — ONLY the smoke remains)
 
-1. Run the **manual TTY smoke** (recipe below) and record the result.
-2. Clean up the worktree: `ExitWorktree` (or `git worktree remove .claude/worktrees/tui-driver-hardening` + `git branch -D worktree-tui-driver-hardening`) — the branch is fully merged, so this is safe whenever convenient. The smoke can run from the main checkout (`cm tui` built from `main`); the worktree is no longer required.
-3. (Optional) push local `main`'s doc commits to origin — needs an explicit user "push".
+1. **Re-stage and drive the manual TTY smoke** (verified recipe in "THE TTY SMOKE" below) and record the result here.
+2. (Optional) push local `main`'s doc commits to origin — needs an explicit user "push".
+3. (Optional, unrelated) the pre-existing cm-tui follow-ups: add a `cm tui` README section; unblock the multi-host GitLab slice (`.worktrees/multi-host` @ `36eb9fa`, still needs a live gitlab.com MR proof).
 
-## Branch / commit state
+## Branch / commit state (all landed)
 
-- **Feature branch:** local `worktree-tui-driver-hardening` @ **`6e04c52`**, base **`15eee70`** (= current `origin/main`); **pushed to origin as `tui-driver-hardening`** (PR #1). Worktree **PRESERVED** at `.claude/worktrees/tui-driver-hardening` (do not remove until PR #1 is merged and the smoke passes).
+- **The 2 code commits are on origin/main and local `main`** (via PR #1 merge `ebd2e9d`):
   - `e487fc2` `fix(tui): use a dedicated redraw message on resize, not connMsg(true)` (Task 1)
   - `6e04c52` `fix(tui): stop SSE reconnect storm on a non-2xx events response` (Task 2)
-- **Local `main`** is ahead of `origin/main` (15eee70) by the slice docs (NOT on the branch, NOT on origin):
-  - `55d3d71` `docs(tui): spec for driver hardening …`
-  - `284e11e` `docs(tui): implementation plan for driver hardening`
-  - + this handoff commit.
-- After the PR merges to origin/main, local `main` (docs) and origin/main (code) reconcile with a normal `git pull` merge — no data loss, no duplication.
+- **Worktree REMOVED.** `.claude/worktrees/tui-driver-hardening` and branch `worktree-tui-driver-hardening` were deleted via `ExitWorktree action:remove discard_changes:true` — "discard" only dropped the redundant branch pointer; both commits are ancestors of `main` (verified `git merge-base --is-ancestor 6e04c52 main` = YES). Remaining worktree: only `multi-host` (untouched).
+- **Local `main`** is ahead of `origin/main` by the doc commits (spec `55d3d71`, plan `284e11e`, the handoffs, + reconcile merge `d0a2801`) — unpushed (default-branch push is harness-gated).
 
 ## What the slice does (spec `docs/superpowers/specs/2026-06-26-tui-driver-hardening-design.md`, plan `…/plans/2026-06-26-tui-driver-hardening.md`)
 
@@ -40,24 +37,57 @@ The post-cm-tui handoff's #2 proposed **reducer→driver terminal-status signall
 - **`go test -race ./...` = all 20 packages PASS** (controller-run, not just implementer-claimed), incl. 3 new `internal/tui` tests: `TestRedrawMsgPreservesConnAndEmitsNoCommands`, `TestStreamEventsNon2xxReturnsTypedErrorWithoutEmitting` (404 + 500), `TestStreamLoopStopsOnNon2xx` (concurrent: goroutine + 5s safety ctx + atomic hit counter; reviewer confirmed non-flaky).
 - Per-task reviews: both Spec ✅ / quality Approved (sonnet). **Final whole-branch review (Opus): Ready-to-merge YES, 0 Critical / 0 Important.** It independently verified the non-obvious seam — dropping SIGWINCH's `connMsg(true)` does NOT strand the indicator, because `conn=true` is independently restored by the poll loop's `runsLoaded` arm + `initialModel`.
 
-## STILL UNRUN — the manual TTY smoke (the user's next step)
+## THE TTY SMOKE (the only remaining item) — VERIFIED re-stage recipe
 
-A subagent/headless agent cannot drive raw mode (`enterRaw` needs a real TTY), so the live path is human-only. Carry over the base smoke from the cm-tui handoff, PLUS two new behaviors this slice introduces:
+A headless agent cannot drive raw mode (`enterRaw` needs a real TTY), so this is human-only. The staging below was run & verified on 2026-06-26 (binaries built, daemon up on `:8139`, two runs parked at a manual gate) — but it is ephemeral, so re-run it. Uses `agent: mock` (zero-cost, no network, no keys).
+
+**1. Stage it** (run these from the repo root; the daemon start may need the sandbox disabled for process/port/git):
+
+```bash
+go build -o /tmp/magisterd ./cmd/magisterd && go build -o /tmp/cm ./cmd/cm
+mkdir -p /tmp/cm-tui-smoke
+/tmp/magisterd -addr 127.0.0.1:8139 -db /tmp/cm-tui-smoke/magister.db >/tmp/cm-tui-smoke/magisterd.log 2>&1 &
+until curl -sf http://127.0.0.1:8139/v1/runs >/dev/null 2>&1; do sleep 0.3; done
+cat > /tmp/cm-tui-smoke/tui-smoke.yaml <<'YAML'
+name: tui-smoke
+concurrency: 1
+steps:
+  - id: greet
+    agent: mock
+    role: implementer
+    prompt: "Say hello, then stop."
+    gate: { policy: manual }       # parks the step at status "awaiting_gate"
+YAML
+export MAGISTER_ADDR=http://127.0.0.1:8139
+/tmp/cm run /tmp/cm-tui-smoke/tui-smoke.yaml   # submit twice -> two parked runs (one to approve, one to cancel+retry)
+/tmp/cm run /tmp/cm-tui-smoke/tui-smoke.yaml
+/tmp/cm ls                                     # both should show "running" (step greet is awaiting_gate)
+```
+
+**2. Drive it — in YOUR OWN terminal** (NOT via the `!` prefix; raw mode needs a real TTY). No bearer token needed (this daemon has no `-auth-token`):
 
 ```
-# start the daemon, submit a run with a manual gate, then:
-cm tui
-# base (from cm-tui slice): runs list appears; 'enter' opens a run; events stream live;
-#   a gate-awaiting step highlights; 'a' approves; 'r' opens the reason editor + rejects;
-#   'c' then 'y' cancels an active run; 'R' retries a failed run; 'q' restores the terminal.
-# NEW #1 (redraw): with the daemon STOPPED so the bar shows "disconnected", resize the
-#   terminal — the indicator must STAY "disconnected" (previously it flipped to
-#   "connected" for ~1.5s until the next poll).
-# NEW #2 (bounded reconnect): focus a run, then make its events endpoint 404 (e.g. point
-#   at a deleted/unknown run id) — the TUI must NOT spin reconnecting; the stream just
-#   goes quiet (re-enter the run to re-arm). Harder to stage by hand; the unit test
-#   TestStreamLoopStopsOnNon2xx already proves the logic.
+MAGISTER_ADDR=http://127.0.0.1:8139 /tmp/cm tui
 ```
+
+| Action | Key | Expect |
+|---|---|---|
+| select runs (left pane) | `j`/`k` | `>` cursor moves |
+| open selected run | `enter` | right pane: `greet  awaiting_gate  <-- approve?` highlighted + live EVENTS log |
+| **approve** (run 1) | `a` | gate releases → `step.done` → `run.done`; run → `succeeded`, events stream live |
+| **reject editor** | `r` | bar → `reject reason: _`; type text, `enter` submits / `esc` aborts |
+| **cancel** (run 2) | `c` then `y` | bar `cancel run …? (y/n)`; run → `canceled` |
+| **retry** (canceled run 2) | `R` | run resumes, re-runs `greet`, parks at the gate again |
+| **quit** | `q` | TUI exits, terminal **restored cleanly** (no garbled prompt / stuck raw mode) |
+
+**3. The two behaviors THIS slice changed — the point of the smoke:**
+
+- **NEW #1 (redraw — the headline fix):** with `cm tui` open, stop the daemon from another terminal (`pkill -TERM -f /tmp/magisterd`). Within ~1.5s the top-right indicator flips to `(disconnected)`. **Resize the terminal window — it must STAY `(disconnected)`** (before this fix it briefly flipped back to `(connected)` until the next poll). Restart the daemon (same command as step 1) to reconnect.
+- **NEW #2 (bounded reconnect):** hard to stage by hand (runs aren't deletable, so you can't easily make a focused run's `/events` return 404). Left to the unit test `TestStreamLoopStopsOnNon2xx`, which proves `streamLoop` stops reconnecting on a non-2xx. Nothing to do interactively.
+
+**4. Teardown:** `pkill -TERM -f /tmp/magisterd && rm -rf /tmp/cm-tui-smoke`
+
+**Record the result** (esp. NEW #1's resize behavior and the clean `q` terminal-restore) back into this handoff / a memory note once driven.
 
 ## Open follow-ups (the 3 review Minors — all triaged NON-blocking by the Opus final review)
 

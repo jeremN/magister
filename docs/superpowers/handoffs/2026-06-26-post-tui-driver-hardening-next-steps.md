@@ -1,27 +1,22 @@
-# Handoff — `cm tui` driver hardening: DONE + REVIEWED locally, PUSH/PR BLOCKED on offline GitHub (2026-06-26)
+# Handoff — `cm tui` driver hardening: DONE + REVIEWED + PUSHED, PR #1 OPEN (2026-06-26)
 
-**Start here next session.** The **`cm tui` driver-hardening slice is code-complete, reviewed clean (Opus: ready-to-merge YES), and fully `-race` green locally — but NOT merged and NOT pushed.** The push to `origin` failed: `github.com` / `api.github.com` do not resolve from this environment (DNS timeout — GitHub/network down on 2026-06-26, confirmed via `curl`, `ping`, and `gh api /rate_limit`). Everything is parked safely on disk. Resume by pushing when connectivity returns, then opening the PR, then running the still-unrun **manual TTY smoke** (the user's stated next step: "driver slice first, then drive the tty smoke").
+**Start here next session.** The **`cm tui` driver-hardening slice is code-complete, reviewed clean (Opus: ready-to-merge YES), fully `-race` green, PUSHED to origin, and open as a code-only PR.** The initial push was blocked earlier in the day (github.com offline / DNS dead), then **retried successfully once connectivity returned**. Remaining: **merge PR #1 on GitHub** (user's action), then run the still-unrun **manual TTY smoke** (the user's stated next step: "driver slice first, then drive the tty smoke").
 
-## Exact resume commands (run when GitHub is reachable)
+- **PR:** https://github.com/jeremN/magister/pull/1 — `fix(tui): driver hardening — redraw message + bounded SSE reconnect`, base `main`, head `tui-driver-hardening`, diff = the 2 code commits (origin/main == branch base 15eee70).
+- After PR #1 merges, origin/main gets the code; local `main` still carries the spec/plan/handoff (unpushed) — reconcile with a normal `git pull` (clean, disjoint files, no duplication).
 
-The user already chose a **code-only PR** (the 2 code commits; spec/plan stay on local `main` and get pushed separately later). Remote branch name: `tui-driver-hardening` (drops the `worktree-` prefix).
+## Resume (PR is already open)
 
-```
-# 1. push the feature branch (local name -> clean remote name)
-git push -u origin worktree-tui-driver-hardening:tui-driver-hardening
+1. **Merge PR #1** on GitHub (or `gh pr merge 1 --merge`).
+2. Reconcile local `main`: `git -C <main-checkout> pull` (brings in the merged code; local main's spec/plan/handoff stay). Optionally push local `main`'s doc commits — note: a direct push to the default branch is harness-gated, needs an explicit user "push".
+3. Run the **manual TTY smoke** (recipe below) and record the result.
+4. Clean up: `ExitWorktree` (or `git worktree remove .claude/worktrees/tui-driver-hardening` + `git branch -D worktree-tui-driver-hardening`) once the PR is merged and the smoke passes.
 
-# 2. open the PR (base = main; origin/main == the branch base 15eee70, so the
-#    PR diff is exactly the 2 code commits)
-gh pr create --base main --head tui-driver-hardening \
-  --title "fix(tui): driver hardening — redraw message + bounded SSE reconnect" \
-  --body "Two isolated fixes in internal/tui/ (no daemon changes, no new deps). (1) A terminal resize sends a dedicated no-op redrawMsg instead of connMsg(true), so resizing while disconnected no longer briefly fakes 'connected'. (2) StreamEvents now returns a typed non-2xx error and streamLoop stops reconnecting on it, ending the ~2/s reconnect storm against a 404/5xx events endpoint; transport errors and clean EOF stay retryable. Spec/plan: docs/superpowers/{specs,plans}/2026-06-26-tui-driver-hardening*. Opus whole-branch review: ready-to-merge. Full go test -race ./... green."
-```
+The original push/PR commands (for reference): `git push -u origin worktree-tui-driver-hardening:tui-driver-hardening`, then `gh pr create --base main --head tui-driver-hardening …` — both DONE.
 
-**Alternative if the user prefers no-network now:** local merge instead of a PR — `git -C <main-checkout> merge worktree-tui-driver-hardening` (clean: disjoint files vs main's doc commits), then `git worktree remove`/`ExitWorktree` to clean up, then push `main` later. The user was offered this (Option 1) and chose the PR path; only fall back if they change their mind.
+## Branch / commit state
 
-## Branch / commit state (all local, nothing on origin yet)
-
-- **Feature branch:** `worktree-tui-driver-hardening` @ **`6e04c52`**, base **`15eee70`** (= current `origin/main`). Worktree **PRESERVED** at `.claude/worktrees/tui-driver-hardening` (do not remove — needed for PR iteration / the smoke).
+- **Feature branch:** local `worktree-tui-driver-hardening` @ **`6e04c52`**, base **`15eee70`** (= current `origin/main`); **pushed to origin as `tui-driver-hardening`** (PR #1). Worktree **PRESERVED** at `.claude/worktrees/tui-driver-hardening` (do not remove until PR #1 is merged and the smoke passes).
   - `e487fc2` `fix(tui): use a dedicated redraw message on resize, not connMsg(true)` (Task 1)
   - `6e04c52` `fix(tui): stop SSE reconnect storm on a non-2xx events response` (Task 2)
 - **Local `main`** is ahead of `origin/main` (15eee70) by the slice docs (NOT on the branch, NOT on origin):

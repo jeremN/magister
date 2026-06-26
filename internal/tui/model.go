@@ -11,6 +11,7 @@ type sseEvent event.Event
 type keyMsg rune
 type actionResult struct{ Err error }
 type connMsg bool
+type redrawMsg struct{} // force a render without mutating state (e.g. on resize)
 
 // ---- commands (reducer -> driver) ----
 type cmdFocus string   // snapshot + (re)open SSE for this run id (on enter)
@@ -126,6 +127,9 @@ func update(m model, ms any) (model, []any) {
 
 	case connMsg:
 		m.conn = bool(v)
+		return m, nil
+
+	case redrawMsg:
 		return m, nil
 
 	case actionResult:

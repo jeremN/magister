@@ -123,7 +123,7 @@ func Run(base, token string) error {
 			case <-ctx.Done():
 				return
 			case <-winch:
-				trySend(msgs, connMsg(true)) // benign message to trigger a re-render
+				trySend(msgs, redrawMsg{}) // force a re-render without touching conn
 			}
 		}
 	}()

@@ -28,14 +28,16 @@ With `ONLCR` off, a bare `\n` is a pure line-feed: cursor moves **down one line 
 
 Driven via the re-staged recipe (daemon `:8139`, two `mock` runs parked at a manual gate, fixed `/tmp/cm`):
 - **Base walkthrough renders and works** — user confirmed "good" after the CRLF fix. The full layout (header / RUNS list / detail+EVENTS / key bar) draws correctly.
-- **NEW #1 (resize stays `(disconnected)`)** — the headline behavior of the driver-hardening slice. Re-confirm explicitly if not already eyeballed: with `cm tui` open, `pkill -TERM -f /tmp/magisterd` → indicator flips `(disconnected)` within ~1.5s → resize the window → it must **stay** `(disconnected)`.
+- **NEW #1 (resize stays `(disconnected)`) — CONFIRMED PASS on a real TTY 2026-06-29.** With `cm tui` open, `pkill -TERM -f /tmp/magisterd` flipped the indicator to `(disconnected)` within ~1.5s; resizing the window kept it `(disconnected)` (no flicker back to `(connected)`). The `redrawMsg` fix from the driver-hardening slice is live-verified. **This was the last open smoke item — the entire `cm tui` line of work is now fully verified.**
 - **NEW #2 (bounded reconnect on non-2xx)** — not hand-stageable; covered by `TestStreamLoopStopsOnNon2xx`.
 
 ## What's left
 
 1. ~~Integrate the branch~~ **DONE** — Opus-reviewed (ready-to-merge YES) and merged to local `main` (`f3cbbe0`). Only remaining integration step: **push `main` to origin** when you're ready (harness-gated, needs explicit "push") — `origin/main` is at `ebd2e9d` (PR #1 merge) and is now 11 commits behind local.
-2. (If not already done) explicitly confirm **NEW #1** resize-stays-disconnected on the real TTY.
-3. **Teardown** the smoke staging when done: `pkill -TERM -f /tmp/magisterd && rm -rf /tmp/cm-tui-smoke`.
+2. ~~confirm **NEW #1** resize-stays-disconnected on the real TTY~~ **DONE — PASS 2026-06-29** (see Smoke result above).
+3. ~~**Teardown** the smoke staging~~ **DONE** (`pkill -TERM -f /tmp/magisterd && rm -rf /tmp/cm-tui-smoke`).
+
+**Net: the `cm tui` line of work (dashboard slice → driver-hardening slice → CRLF fix) is fully done, merged, pushed, and TTY-verified. Nothing left here.**
 
 ## Still-open, unrelated (carried from prior handoffs)
 

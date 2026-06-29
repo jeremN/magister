@@ -134,8 +134,7 @@ func Run(base, token string) error {
 		if err != nil || w == 0 {
 			w, h = 80, 24
 		}
-		os.Stdout.WriteString("\x1b[H\x1b[2J") // home + clear
-		os.Stdout.WriteString(view(m, w, h))
+		os.Stdout.WriteString(frame(m, w, h)) // home + clear + CRLF-terminated rows (raw mode has no ONLCR)
 	}
 
 	// Kick an initial fetch.

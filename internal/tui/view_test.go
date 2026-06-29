@@ -94,6 +94,27 @@ func TestViewFitsNarrowTerminal(t *testing.T) {
 	}
 }
 
+func TestFrameUsesCRLFForRawTerminal(t *testing.T) {
+	// Raw mode (term.MakeRaw) disables ONLCR, so a bare \n moves the cursor down
+	// WITHOUT a carriage return — rows would stair-step off the screen. frame()
+	// must terminate every line with \r\n and start by homing+clearing.
+	m := initialModel()
+	m, _ = update(m, runsLoaded{{ID: "a1", Name: "feature", Status: "running"}})
+	out := frame(m, 80, 24)
+
+	if !strings.HasPrefix(out, "\x1b[H\x1b[2J") {
+		t.Fatalf("frame must home+clear first; got prefix %q", out[:min(12, len(out))])
+	}
+	// No bare \n may survive once CRLFs are removed.
+	if strings.Contains(strings.ReplaceAll(out, "\r\n", ""), "\n") {
+		t.Fatal("frame contains a bare \\n; raw mode needs \\r\\n line endings")
+	}
+	// 24 rows => 23 line separators, all CRLF.
+	if got := strings.Count(out, "\r\n"); got != 23 {
+		t.Fatalf("want 23 CRLF separators for a 24-row frame, got %d", got)
+	}
+}
+
 func TestClipNegativeWidthIsSafe(t *testing.T) {
 	// clip must be total: a negative or zero width returns "" without panicking.
 	if got := clip("abc", -1); got != "" {

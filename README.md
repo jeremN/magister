@@ -37,6 +37,7 @@ goroutine-per-step DAG derived from each step's `needs`.
 - [Flow YAML reference](#flow-yaml-reference)
 - [Agents](#agents)
 - [`cm` CLI reference](#cm-cli-reference)
+- [`cm tui` — live dashboard](#cm-tui--live-dashboard)
 - [Delivery: push / PR / ship](#delivery-push--pr--ship)
 - [HTTP API](#http-api)
 - [Configuration](#configuration)
@@ -243,12 +244,41 @@ cm ship   <run> [--remote ...] [--head-repo ...] [--as ...] [--step ...] [--base
 cm gc     [--older-than <dur>]                                 reclaim terminal-run scratch now
 cm rm     <run>                                                reclaim one run's scratch now
 cm loglevel [debug|info|warn|error]                            get/set the daemon log level at runtime
+cm tui                                                         live full-screen dashboard (see below)
 ```
 
 - `cm run --repo <path>` provisions the run's workspace from an existing git
   repo; `--base <ref>` picks the base branch/commit.
 - `retry` resumes the **same** run id, reusing its scratch and skipping
   already-succeeded steps.
+
+---
+
+## `cm tui` — live dashboard
+
+A full-screen terminal dashboard to watch runs live and act on gates without
+juggling `cm watch` / `cm approve` in separate shells. It is a pure REST + SSE
+client — no daemon changes, no extra server.
+
+```bash
+cm tui            # connects to $MAGISTER_ADDR (default http://127.0.0.1:8080)
+```
+
+| Key | Action |
+|---|---|
+| `j` / `k` | move the run-list cursor |
+| `enter` | open the selected run (its steps + a live event log) |
+| `a` | approve the focused run's awaiting gate |
+| `r` | reject — opens a reason editor (`enter` submits, `esc` aborts) |
+| `c` then `y` | cancel the run |
+| `R` | retry a failed/canceled run in place |
+| `q` | quit (restores the terminal) |
+
+The left pane lists runs; the right pane shows the focused run's steps (a gate
+shows `<-- approve?`) and streams its events live over SSE. The top-right
+indicator reflects daemon reachability (`connected` / `disconnected`) from a
+~1.5s poll. If the daemon is started with an auth token, set
+`MAGISTER_BEARER_TOKEN` so the TUI can authenticate (plain `cm` does not send it).
 
 ---
 

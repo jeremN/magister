@@ -20,7 +20,9 @@ With `ONLCR` off, a bare `\n` is a pure line-feed: cursor moves **down one line 
 - `driver.go` render closure now writes `frame(m, w, h)` (one line, replacing the two-write `\x1b[H\x1b[2J` + `view`).
 - Regression test `TestFrameUsesCRLFForRawTerminal` (RED→GREEN): asserts the frame homes+clears first, contains no bare `\n` once CRLFs are stripped, and has exactly 23 CRLF separators for a 24-row frame.
 - **Verification:** `gofmt -l internal/tui/` clean; `go build ./...` clean; **full `go test -race ./...` green across all 20 packages.**
-- **Commit:** `8314a7a` `fix(tui): use CRLF line endings when rendering to the raw terminal` on branch **`fix-tui-raw-mode-crlf`** (branched from `main`). 3 files (`view.go`, `driver.go`, `view_test.go`), +32/-2.
+- **Commits:** `8314a7a` `fix(tui): use CRLF line endings when rendering to the raw terminal` (3 files: `view.go`, `driver.go`, `view_test.go`) + `f3cbbe0` `test(tui): derive expected CRLF count from the view's newline count` (the one actionable review Minor).
+- **Opus whole-branch review (final gate): Ready-to-merge YES — 0 Critical / 0 Important, 3 Minor.** Confirmed the `\n`→`\r\n` translation covers 100% of rendered rows (view emits only `\n`, no stray `\r` — `reasonBuf` is printable-ASCII-filtered), the seam keeps `view()` pure, and the regression test genuinely fails if `frame` reverts. The 2 non-actionable Minors (cursor not hidden via `\x1b[?25l`; `\x1b[2J` now strictly redundant) are pre-existing and left for the manual-smoke follow-ups.
+- **MERGED to local `main` via fast-forward → `main` now `f3cbbe0`** (branch `fix-tui-raw-mode-crlf` deleted; commits preserved). **NOT pushed** — `main` is ahead of `origin/main` (`ebd2e9d`) by 11 commits (4 from this session: `8314a7a`/`6a1e3f9`/`f3cbbe0`/the `3cb3ed9` handoff-update + 7 prior unpushed doc/merge commits); default-branch push is harness-gated and needs an explicit user "push".
 
 ## Smoke result
 
@@ -31,7 +33,7 @@ Driven via the re-staged recipe (daemon `:8139`, two `mock` runs parked at a man
 
 ## What's left
 
-1. **Integrate the branch** `fix-tui-raw-mode-crlf` (`8314a7a`). It's on a branch, **not merged into `main`, not pushed.** Options: fast-forward/merge into local `main` and push (default-branch push is harness-gated → needs explicit user "push"), or open PR #2. A one-line raw-mode fix + regression test likely doesn't warrant the full brainstorm→plan→SDD→Opus arc, but an Opus whole-branch review is cheap insurance if desired.
+1. ~~Integrate the branch~~ **DONE** — Opus-reviewed (ready-to-merge YES) and merged to local `main` (`f3cbbe0`). Only remaining integration step: **push `main` to origin** when you're ready (harness-gated, needs explicit "push") — `origin/main` is at `ebd2e9d` (PR #1 merge) and is now 11 commits behind local.
 2. (If not already done) explicitly confirm **NEW #1** resize-stays-disconnected on the real TTY.
 3. **Teardown** the smoke staging when done: `pkill -TERM -f /tmp/magisterd && rm -rf /tmp/cm-tui-smoke`.
 

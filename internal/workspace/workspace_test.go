@@ -21,11 +21,11 @@ func TestManagerTeardownRunIsNoop(t *testing.T) {
 
 func TestSharedReusesRunRoot(t *testing.T) {
 	m := &Manager{Root: t.TempDir()}
-	d1, _, err := m.For("run1", &flow.Step{ID: "a", Workspace: flow.WSShared})
+	d1, _, err := m.For(context.Background(), "run1", &flow.Step{ID: "a", Workspace: flow.WSShared})
 	if err != nil {
 		t.Fatal(err)
 	}
-	d2, _, err := m.For("run1", &flow.Step{ID: "b", Workspace: flow.WSShared})
+	d2, _, err := m.For(context.Background(), "run1", &flow.Step{ID: "b", Workspace: flow.WSShared})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,8 +39,8 @@ func TestSharedReusesRunRoot(t *testing.T) {
 
 func TestIsolatedGetsOwnDir(t *testing.T) {
 	m := &Manager{Root: t.TempDir()}
-	shared, _, _ := m.For("run1", &flow.Step{ID: "a", Workspace: flow.WSShared})
-	iso, cleanup, err := m.For("run1", &flow.Step{ID: "b", Workspace: flow.WSIsolated})
+	shared, _, _ := m.For(context.Background(), "run1", &flow.Step{ID: "a", Workspace: flow.WSShared})
+	iso, cleanup, err := m.For(context.Background(), "run1", &flow.Step{ID: "b", Workspace: flow.WSIsolated})
 	if err != nil {
 		t.Fatal(err)
 	}

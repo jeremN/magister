@@ -259,12 +259,11 @@ func (m *GitManager) freshWorktree(ctx context.Context, base, wt, stepID string)
 	return err
 }
 
-func (m *GitManager) For(runID core.RunID, s *flow.Step) (string, func() error, error) {
+func (m *GitManager) For(ctx context.Context, runID core.RunID, s *flow.Step) (string, func() error, error) {
 	lock := m.runLock(runID)
 	lock.Lock()
 	defer lock.Unlock()
 
-	ctx := context.Background()
 	base := m.baseDir(runID)
 	if err := m.ensureRepo(ctx, base, m.specFor(runID)); err != nil {
 		return "", nil, err

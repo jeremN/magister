@@ -56,7 +56,11 @@ type Executor interface {
 // Workspace hands a step a working directory and a cleanup func, and tears down a
 // run's isolated worktrees when the run ends.
 type Workspace interface {
-	For(runID RunID, s *flow.Step) (dir string, cleanup func() error, err error)
+	// For hands a step its working directory and a cleanup func, lazily creating the
+	// run's base repo (and, for an isolated step, a worktree) on first use. ctx
+	// cancels the underlying lazy clone / worktree git subprocess, matching the other
+	// methods here.
+	For(ctx context.Context, runID RunID, s *flow.Step) (dir string, cleanup func() error, err error)
 	// Commit records the step's worktree as a commit on its branch and returns the
 	// branch name and commit sha. A no-op (returns "", "", nil) for workspaces with
 	// no git backing (the plain Manager) and acceptable to call for any step; the

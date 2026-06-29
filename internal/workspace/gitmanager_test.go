@@ -36,11 +36,11 @@ func gitOut(t *testing.T, dir string, args ...string) string {
 func TestGitManagerSharedUsesBaseTree(t *testing.T) {
 	requireGit(t)
 	m := &GitManager{Root: t.TempDir()}
-	d1, _, err := m.For("r1", &flow.Step{ID: "a", Workspace: flow.WSShared})
+	d1, _, err := m.For(context.Background(), "r1", &flow.Step{ID: "a", Workspace: flow.WSShared})
 	if err != nil {
 		t.Fatal(err)
 	}
-	d2, _, err := m.For("r1", &flow.Step{ID: "b", Workspace: flow.WSShared})
+	d2, _, err := m.For(context.Background(), "r1", &flow.Step{ID: "b", Workspace: flow.WSShared})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func TestGitManagerIsolatedGetsWorktree(t *testing.T) {
 	requireGit(t)
 	root := t.TempDir()
 	m := &GitManager{Root: root}
-	dir, _, err := m.For("r1", &flow.Step{ID: "step-a", Workspace: flow.WSIsolated})
+	dir, _, err := m.For(context.Background(), "r1", &flow.Step{ID: "step-a", Workspace: flow.WSIsolated})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func TestGitManagerTeardownRemovesWorktrees(t *testing.T) {
 	requireGit(t)
 	root := t.TempDir()
 	m := &GitManager{Root: root}
-	dir, _, err := m.For("r1", &flow.Step{ID: "a", Workspace: flow.WSIsolated})
+	dir, _, err := m.For(context.Background(), "r1", &flow.Step{ID: "a", Workspace: flow.WSIsolated})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,10 +96,10 @@ func TestGitManagerForIsResumeIdempotent(t *testing.T) {
 	requireGit(t)
 	m := &GitManager{Root: t.TempDir()}
 	step := &flow.Step{ID: "a", Workspace: flow.WSIsolated}
-	if _, _, err := m.For("r1", step); err != nil {
+	if _, _, err := m.For(context.Background(), "r1", step); err != nil {
 		t.Fatalf("first For: %v", err)
 	}
-	dir, _, err := m.For("r1", step)
+	dir, _, err := m.For(context.Background(), "r1", step)
 	if err != nil {
 		t.Fatalf("second For (resume) should succeed, got %v", err)
 	}
@@ -128,7 +128,7 @@ func TestGitManagerForHealsUnbornHead(t *testing.T) {
 		t.Fatalf("init: %v: %s", err, out)
 	}
 	m := &GitManager{Root: root}
-	dir, _, err := m.For("r1", &flow.Step{ID: "a", Workspace: flow.WSIsolated})
+	dir, _, err := m.For(context.Background(), "r1", &flow.Step{ID: "a", Workspace: flow.WSIsolated})
 	if err != nil {
 		t.Fatalf("For should heal an unborn HEAD, got %v", err)
 	}
@@ -146,7 +146,7 @@ func TestGitManagerConcurrentIsolatedFor(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			_, _, errs[i] = m.For("r1", &flow.Step{ID: fmt.Sprintf("s%d", i), Workspace: flow.WSIsolated})
+			_, _, errs[i] = m.For(context.Background(), "r1", &flow.Step{ID: fmt.Sprintf("s%d", i), Workspace: flow.WSIsolated})
 		}(i)
 	}
 	wg.Wait()
@@ -163,7 +163,7 @@ func TestGitManagerTeardownRemovesAllWorktrees(t *testing.T) {
 	m := &GitManager{Root: root}
 	var dirs []string
 	for _, id := range []string{"a", "b", "c"} {
-		d, _, err := m.For("r1", &flow.Step{ID: id, Workspace: flow.WSIsolated})
+		d, _, err := m.For(context.Background(), "r1", &flow.Step{ID: id, Workspace: flow.WSIsolated})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -182,7 +182,7 @@ func TestGitManagerTeardownRemovesAllWorktrees(t *testing.T) {
 func TestGitManagerCommitRecordsWork(t *testing.T) {
 	requireGit(t)
 	m := &GitManager{Root: t.TempDir()}
-	dir, _, err := m.For("r1", &flow.Step{ID: "a", Workspace: flow.WSIsolated})
+	dir, _, err := m.For(context.Background(), "r1", &flow.Step{ID: "a", Workspace: flow.WSIsolated})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +207,7 @@ func TestGitManagerCommitRecordsWork(t *testing.T) {
 func TestGitManagerCommitAllowsEmpty(t *testing.T) {
 	requireGit(t)
 	m := &GitManager{Root: t.TempDir()}
-	dir, _, err := m.For("r1", &flow.Step{ID: "a", Workspace: flow.WSIsolated})
+	dir, _, err := m.For(context.Background(), "r1", &flow.Step{ID: "a", Workspace: flow.WSIsolated})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +239,7 @@ func TestGitManagerProvisionClonesRealRepo(t *testing.T) {
 	if err := m.Provision(context.Background(), "r1", src, sha); err != nil {
 		t.Fatalf("provision: %v", err)
 	}
-	wt, _, err := m.For("r1", &flow.Step{ID: "build", Workspace: flow.WSIsolated})
+	wt, _, err := m.For(context.Background(), "r1", &flow.Step{ID: "build", Workspace: flow.WSIsolated})
 	if err != nil {
 		t.Fatalf("For: %v", err)
 	}
@@ -288,7 +288,7 @@ func TestGitManagerProvisionRejectsFlaglikeBase(t *testing.T) {
 	if err := m.Provision(context.Background(), "r1", src, "--upload-pack=touch pwned"); err != nil {
 		t.Fatalf("provision records the spec, should not error: %v", err)
 	}
-	if _, _, err := m.For("r1", &flow.Step{ID: "build", Workspace: flow.WSIsolated}); err == nil {
+	if _, _, err := m.For(context.Background(), "r1", &flow.Step{ID: "build", Workspace: flow.WSIsolated}); err == nil {
 		t.Fatal("For should reject a non-hex/flag-like base")
 	}
 }
@@ -297,7 +297,7 @@ func TestGitManagerNoRepoUsesEmptyBase(t *testing.T) {
 	requireGit(t)
 	m := &GitManager{Root: t.TempDir()}
 	// No Provision at all => synthetic empty base (today's behavior).
-	wt, _, err := m.For("r1", &flow.Step{ID: "build", Workspace: flow.WSIsolated})
+	wt, _, err := m.For(context.Background(), "r1", &flow.Step{ID: "build", Workspace: flow.WSIsolated})
 	if err != nil {
 		t.Fatalf("For: %v", err)
 	}
@@ -312,7 +312,7 @@ func TestGitManagerProvisionEmptyRepoUsesEmptyBase(t *testing.T) {
 	if err := m.Provision(context.Background(), "r1", "", ""); err != nil {
 		t.Fatalf("provision empty: %v", err)
 	}
-	wt, _, err := m.For("r1", &flow.Step{ID: "build", Workspace: flow.WSIsolated})
+	wt, _, err := m.For(context.Background(), "r1", &flow.Step{ID: "build", Workspace: flow.WSIsolated})
 	if err != nil {
 		t.Fatalf("For: %v", err)
 	}
@@ -347,7 +347,7 @@ func TestGitManagerCommitCanceledCtxAborts(t *testing.T) {
 	m := &GitManager{Root: t.TempDir()}
 
 	// Set up a valid worktree first (using Background ctx, which succeeds).
-	dir, _, err := m.For("r1", &flow.Step{ID: "a", Workspace: flow.WSIsolated})
+	dir, _, err := m.For(context.Background(), "r1", &flow.Step{ID: "a", Workspace: flow.WSIsolated})
 	if err != nil {
 		t.Fatalf("For: %v", err)
 	}
@@ -367,6 +367,23 @@ func TestGitManagerCommitCanceledCtxAborts(t *testing.T) {
 		// exec.CommandContext may return an *exec.ExitError with "signal: killed"
 		// rather than context.Canceled on some platforms — that's fine; the key
 		// requirement is that it did NOT return nil (succeed).
+	}
+}
+
+// TestGitManagerForCanceledCtxAborts verifies a canceled context aborts For's lazy
+// repo creation (the git subprocess in ensureRepo) rather than hanging or
+// succeeding. Guards the ctx that For now threads through.
+func TestGitManagerForCanceledCtxAborts(t *testing.T) {
+	requireGit(t)
+	m := &GitManager{Root: t.TempDir()}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // canceled before the first (repo-creating) call
+
+	// The first For on a fresh manager lazily creates the base repo via git; a
+	// pre-canceled ctx must abort that subprocess, so For returns an error.
+	if _, _, err := m.For(ctx, "r1", &flow.Step{ID: "a", Workspace: flow.WSShared}); err == nil {
+		t.Fatal("For with a pre-canceled context should fail, got nil error")
 	}
 }
 

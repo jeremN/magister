@@ -59,7 +59,7 @@ func (m *Manager) Reclaim(_ context.Context, runID core.RunID) (bool, error) {
 	return true, nil
 }
 
-func (m *Manager) For(runID core.RunID, s *flow.Step) (string, func() error, error) {
+func (m *Manager) For(_ context.Context, runID core.RunID, s *flow.Step) (string, func() error, error) {
 	dir := filepath.Join(m.Root, string(runID))
 	if s.Workspace == flow.WSIsolated {
 		dir = filepath.Join(dir, s.ID)

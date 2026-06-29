@@ -287,7 +287,7 @@ func (e *Engine) runDAG(parent context.Context, runID core.RunID, f *flow.Flow, 
 
 // runStep runs one step: execute + gate, looping on the unified attempt budget.
 func (e *Engine) runStep(ctx context.Context, runID core.RunID, s *flow.Step, inputs []core.Artifact) (core.Result, error) {
-	workDir, cleanup, err := e.WS.For(runID, s)
+	workDir, cleanup, err := e.WS.For(ctx, runID, s)
 	if err != nil {
 		return core.Result{}, err
 	}

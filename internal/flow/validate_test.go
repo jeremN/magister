@@ -198,6 +198,7 @@ func TestValidateGapPositiveCases(t *testing.T) {
 	t.Run("agent with role only", func(t *testing.T) {
 		f := baseFlow()
 		f.Steps[0].Role = "senior engineer"
+		f.Steps[0].Prompt = "" // genuinely role-only: baseFlow() sets a prompt; clear it so this exercises role-without-prompt
 		if err := Validate(f); err != nil {
 			t.Fatalf("agent step with role should be accepted: %v", err)
 		}

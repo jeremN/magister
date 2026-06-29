@@ -46,8 +46,8 @@ func Run(base, token string) error {
 	}
 	defer restore() //nolint:errcheck // best-effort terminal restore
 
-	os.Stdout.WriteString("\x1b[?1049h") // alt screen
-	defer os.Stdout.WriteString("\x1b[?1049l\x1b[?25h")
+	os.Stdout.WriteString("\x1b[?1049h\x1b[?25l")       // enter alt screen + hide cursor
+	defer os.Stdout.WriteString("\x1b[?1049l\x1b[?25h") // leave alt screen + restore cursor
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

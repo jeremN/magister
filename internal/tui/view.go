@@ -19,14 +19,16 @@ func clip(s string, w int) string {
 	return s + strings.Repeat(" ", w-len(runes))
 }
 
-// frame renders one full screen of bytes for a raw terminal: home + clear, then
-// the view with CRLF line endings. Raw mode (term.MakeRaw) disables ONLCR, so a
-// bare \n would move the cursor down WITHOUT a carriage return and stair-step the
-// rows diagonally off-screen. view() keeps \n as its logical separator (its tests
-// depend on it); CRLF translation is a property of writing to a raw terminal, so
-// it lives here at the write boundary.
+// frame renders one full screen of bytes for a raw terminal: home the cursor, then
+// the view with CRLF line endings. view() pads to exactly h full-width rows, so the
+// home + full repaint overwrites every cell — no explicit screen-clear is needed
+// (an \x1b[2J would only add a per-frame flash). Raw mode (term.MakeRaw) disables
+// ONLCR, so a bare \n would move the cursor down WITHOUT a carriage return and
+// stair-step the rows diagonally off-screen; view() keeps \n as its logical
+// separator (its tests depend on it), so CRLF translation lives here at the write
+// boundary.
 func frame(m model, w, h int) string {
-	return "\x1b[H\x1b[2J" + strings.ReplaceAll(view(m, w, h), "\n", "\r\n")
+	return "\x1b[H" + strings.ReplaceAll(view(m, w, h), "\n", "\r\n")
 }
 
 func view(m model, w, h int) string {

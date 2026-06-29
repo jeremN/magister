@@ -109,9 +109,12 @@ func TestFrameUsesCRLFForRawTerminal(t *testing.T) {
 	if strings.Contains(strings.ReplaceAll(out, "\r\n", ""), "\n") {
 		t.Fatal("frame contains a bare \\n; raw mode needs \\r\\n line endings")
 	}
-	// 24 rows => 23 line separators, all CRLF.
-	if got := strings.Count(out, "\r\n"); got != 23 {
-		t.Fatalf("want 23 CRLF separators for a 24-row frame, got %d", got)
+	// Every logical \n in the view must become exactly one \r\n in the frame.
+	// Derive the count from the view (which holds the "exactly h rows" invariant)
+	// so this stays correct if the row layout ever changes.
+	wantCRLF := strings.Count(view(m, 80, 24), "\n")
+	if got := strings.Count(out, "\r\n"); got != wantCRLF {
+		t.Fatalf("want %d CRLF separators, got %d", wantCRLF, got)
 	}
 }
 

@@ -5,6 +5,11 @@ import (
 	"strings"
 )
 
+// clip pads or truncates s to exactly w runes (a trailing … marks truncation).
+// It measures runes, not display columns — fine for the ASCII content this TUI
+// renders (run names, statuses, timestamps, event kinds); a wide/combining rune
+// would under-fill a row, which now (no per-frame screen-clear) could leave a
+// stale cell. Swap in a width-aware measure here if non-ASCII content arrives.
 func clip(s string, w int) string {
 	if w <= 0 {
 		return ""

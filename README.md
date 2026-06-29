@@ -275,9 +275,9 @@ cm tui            # connects to $MAGISTER_ADDR (default http://127.0.0.1:8080)
 | `q` | quit (restores the terminal) |
 
 The left pane lists runs; the right pane shows the focused run's steps (a gate
-shows `<-- approve?`) and streams its events live over SSE. The top-right
-indicator reflects daemon reachability (`connected` / `disconnected`) from a
-~1.5s poll. If the daemon is started with an auth token, set
+shows `<-- approve?`) and streams its events live over SSE. An indicator in the
+top bar (after the title) reflects daemon reachability
+(`connected` / `disconnected`) from a ~1.5s poll. If the daemon is started with an auth token, set
 `MAGISTER_BEARER_TOKEN` so the TUI can authenticate (plain `cm` does not send it).
 
 ---

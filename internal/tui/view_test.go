@@ -87,8 +87,10 @@ func TestViewFitsNarrowTerminal(t *testing.T) {
 			t.Fatalf("w=%d h=%d: want %d rows, got %d:\n%s", tc.w, tc.h, tc.h, len(rows), out)
 		}
 		for i, row := range rows {
-			if n := len([]rune(row)); n > tc.w {
-				t.Fatalf("w=%d h=%d: row %d is %d runes (> w):\n%q", tc.w, tc.h, i, n, row)
+			// Exactly w (not just <= w): frame() drops the per-frame screen-clear, so a
+			// row narrower than w would leave stale cells from the previous frame.
+			if n := len([]rune(row)); n != tc.w {
+				t.Fatalf("w=%d h=%d: row %d is %d runes (want exactly %d):\n%q", tc.w, tc.h, i, n, tc.w, row)
 			}
 		}
 	}

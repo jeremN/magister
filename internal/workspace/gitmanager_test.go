@@ -381,9 +381,13 @@ func TestGitManagerForCanceledCtxAborts(t *testing.T) {
 	cancel() // canceled before the first (repo-creating) call
 
 	// The first For on a fresh manager lazily creates the base repo via git; a
-	// pre-canceled ctx must abort that subprocess, so For returns an error.
-	if _, _, err := m.For(ctx, "r1", &flow.Step{ID: "a", Workspace: flow.WSShared}); err == nil {
-		t.Fatal("For with a pre-canceled context should fail, got nil error")
+	// pre-canceled ctx must abort that subprocess. exec.CommandContext returns
+	// context.Canceled when ctx is already done before the process starts, and
+	// m.run wraps it with %w — so assert that exact cause, not merely non-nil
+	// (which could pass for an unrelated reason).
+	_, _, err := m.For(ctx, "r1", &flow.Step{ID: "a", Workspace: flow.WSShared})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("For with a pre-canceled context should fail with context.Canceled, got %v", err)
 	}
 }
 
